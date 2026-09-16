@@ -48,6 +48,14 @@ from englishlearn.storage.project_store import (
     has_subtitles,
 )
 from englishlearn.storage.collections_store import CollectionStore
+from englishlearn.storage.subtitle_editor import (
+    history_status as subtitle_history_status,
+    merge_with_next as merge_subtitle_with_next,
+    redo as redo_subtitle_edit,
+    split_cue as split_subtitle_cue,
+    undo as undo_subtitle_edit,
+    update_cue as update_subtitle_cue,
+)
 from englishlearn.paths import work_dir
 from englishlearn.processing import pipeline_runner
 
@@ -3549,6 +3557,96 @@ def _render_transcript_sheet(subtitles: list[dict], lang: str) -> None:
     )
 
 
+def _refresh_edited_subtitles(project_id: str) -> None:
+    refreshed = load_project_subtitles(project_id) or []
+    st.session_state.subtitles = refreshed
+
+
+def _render_subtitle_editor(project_id: str, subtitles: list[dict], lang: str) -> None:
+    """Render one focused editor instead of hundreds of expensive widgets."""
+    if not subtitles:
+        return
+    labels = {
+        str(cue.get("cue_id")): (
+            f"{float(cue.get('start', 0)):.1f}s · "
+            f"{str(cue.get('text') or '')[:72]}"
+        )
+        for cue in subtitles
+    }
+    cue_ids = list(labels)
+    selected_id = st.selectbox(
+        t("editor.select", lang), cue_ids,
+        format_func=lambda value: labels[value], key=f"subtitle_editor_cue_{project_id}",
+    )
+    cue = next(item for item in subtitles if str(item.get("cue_id")) == selected_id)
+    history = subtitle_history_status(project_id)
+    undo_col, redo_col, status_col = st.columns([1, 1, 3], vertical_alignment="center")
+    with undo_col:
+        if st.button(t("editor.undo", lang), disabled=history["undo"] == 0, key=f"editor_undo_{project_id}"):
+            if undo_subtitle_edit(project_id) is not None:
+                _refresh_edited_subtitles(project_id)
+                st.rerun()
+    with redo_col:
+        if st.button(t("editor.redo", lang), disabled=history["redo"] == 0, key=f"editor_redo_{project_id}"):
+            if redo_subtitle_edit(project_id) is not None:
+                _refresh_edited_subtitles(project_id)
+                st.rerun()
+    with status_col:
+        st.caption(t("editor.history", lang, undo=history["undo"], redo=history["redo"]))
+
+    with st.form(f"subtitle_edit_form_{project_id}_{selected_id}", border=True):
+        source = st.text_area(t("editor.source", lang), value=str(cue.get("text") or ""), height=100)
+        target = st.text_area(t("editor.target", lang), value=str(cue.get("translation") or ""), height=100)
+        start_col, end_col = st.columns(2)
+        with start_col:
+            start = st.number_input(t("editor.start", lang), min_value=0.0, value=float(cue.get("start", 0)), step=0.1, format="%.3f")
+        with end_col:
+            end = st.number_input(t("editor.end", lang), min_value=0.0, value=float(cue.get("end", 0)), step=0.1, format="%.3f")
+        if st.form_submit_button(t("editor.save", lang), type="primary"):
+            if update_subtitle_cue(
+                project_id, selected_id, text=source, translation=target,
+                start=start, end=end,
+            ) is not None:
+                _refresh_edited_subtitles(project_id)
+                st.toast(t("editor.saved", lang), icon="✅")
+                st.rerun()
+
+    split_default = max(1, min(len(str(cue.get("text") or "")) - 1, len(str(cue.get("text") or "")) // 2))
+    op_a, op_b = st.columns(2)
+    with op_a:
+        split_at = st.number_input(
+            t("editor.split_position", lang), min_value=1,
+            max_value=max(1, len(str(cue.get("text") or "")) - 1),
+            value=split_default, step=1, key=f"split_at_{project_id}_{selected_id}",
+        )
+        if st.button(t("editor.split", lang), key=f"split_{project_id}_{selected_id}", width="stretch"):
+            if split_subtitle_cue(project_id, selected_id, int(split_at)) is not None:
+                _refresh_edited_subtitles(project_id)
+                st.rerun()
+            st.error(t("editor.split_invalid", lang))
+    with op_b:
+        st.caption(t("editor.merge_hint", lang))
+        if st.button(t("editor.merge_next", lang), key=f"merge_{project_id}_{selected_id}", width="stretch"):
+            if merge_subtitle_with_next(project_id, selected_id) is not None:
+                _refresh_edited_subtitles(project_id)
+                st.rerun()
+            st.error(t("editor.merge_invalid", lang))
+    project = next(
+        (item for item in (st.session_state.projects or []) if item.get("id") == project_id),
+        None,
+    )
+    if project and st.button(
+        t("editor.retranslate_selected", lang),
+        key=f"retranslate_selected_{project_id}_{selected_id}", width="stretch",
+    ):
+        title = project.get("custom_title") or project.get("title") or project_id
+        if _queue_project_task(
+            "partial_retranslate", project, title, cue_ids=[selected_id],
+        ):
+            st.toast(t("editor.retranslate_queued", lang), icon="🔄")
+            st.rerun()
+
+
 def _resolve_project_playback(proj: dict, lang: str) -> tuple[Optional[str], Optional[str]]:
     """Resolve a project into (video_path, server_url).
 
@@ -4062,7 +4160,9 @@ def _render_project_progress_fragment(project_id: str, lang: str) -> None:
         _render_processing_status(task, lang)
 
 
-def _queue_project_task(kind: str, proj: dict, title: str) -> bool:
+def _queue_project_task(
+    kind: str, proj: dict, title: str, *, cue_ids: Optional[list[str]] = None,
+) -> bool:
     """Validate the active model once, then queue a safe project operation."""
     preset = _active_preset()
     setup_error = _translation_setup_error(preset)
@@ -4085,6 +4185,7 @@ def _queue_project_task(kind: str, proj: dict, title: str) -> bool:
         "max_tokens": preset.get("max_tokens", 32768),
         "max_workers": st.session_state.max_workers,
         "filename": title,
+        "cue_ids": list(cue_ids or []),
     }
     if kind == "reprocess":
         params["asr_model"] = st.session_state.asr_model
@@ -4344,6 +4445,8 @@ def _render_project_detail(lang, presets):
 
     with st.expander(t("results.table_header", lang)):
         _render_transcript_sheet(subtitles, lang)
+        with st.expander(t("editor.title", lang)):
+            _render_subtitle_editor(pid, subtitles, lang)
 
 
 # ---------------------------------------------------------------------------

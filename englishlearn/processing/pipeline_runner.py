@@ -28,7 +28,8 @@ from ..media.media_manager import (
 from ..storage.project_store import (
     load_projects, append_project, update_project,
     create_project, save_subtitles_to_project,
-    load_project_raw_subtitles, save_subtitle_layers,
+    load_project_raw_subtitles, load_project_segmented_subtitles,
+    load_project_subtitles, save_subtitle_layers,
 )
 from .subtitle_contract import normalize_raw_cues, normalize_segmented_cues
 from .sentence_segmenter import sentence_segment, SUBTITLE_MIN_PAUSE, SUBTITLE_MAX_WORDS
@@ -378,15 +379,25 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             video_path = params["video_path"]
             audio_path = params["audio_path"]
             subtitles_raw = None
-        else:  # retranslate
+        else:  # full or selected-cue retranslation
             task["step"] = 3
             task["stage"] = "segment"
-            subtitles_raw = load_project_raw_subtitles(params["project_id"])
+            if kind == "partial_retranslate":
+                all_segmented = load_project_segmented_subtitles(params["project_id"])
+                requested_ids = {str(value) for value in params.get("cue_ids", [])}
+                subtitles_raw = [
+                    cue for cue in (all_segmented or [])
+                    if str(cue.get("cue_id")) in requested_ids
+                ]
+            else:
+                subtitles_raw = load_project_raw_subtitles(params["project_id"])
             video_path = params["video_path"]
             audio_path = params["audio_path"]
 
             if subtitles_raw is None:
                 raise RuntimeError("Raw subtitles are unavailable. Re-process the video before translating again.")
+            if kind == "partial_retranslate" and not subtitles_raw:
+                raise RuntimeError("The selected subtitle no longer exists. Refresh the project and try again.")
 
         if subtitles_raw is None:
             _check_cancelled(task)
@@ -430,7 +441,11 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             model_used = "platform:native-target-subtitles"
         else:
             _check_cancelled(task)
-            if can_use_ai_segment(_seg_model) and not has_word_timing:
+            if kind == "partial_retranslate":
+                subtitles_raw = normalize_segmented_cues(
+                    subtitles_raw, source_subtitles_raw,
+                )
+            elif can_use_ai_segment(_seg_model) and not has_word_timing:
                 task["step"] = 3
                 task["stage"] = "segment"
                 task["step_label"] = "AI segmentation"
@@ -508,7 +523,29 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             subtitles if native_target_used else subtitles_raw,
             source_subtitles_raw,
         )
-        if kind == "retranslate":
+        if kind == "partial_retranslate":
+            projects_list = load_projects()
+            proj = next((p for p in projects_list if p["id"] == params["project_id"]), None)
+            if proj is None:
+                raise RuntimeError("The project no longer exists in the library.")
+            full_raw = load_project_raw_subtitles(params["project_id"]) or source_subtitles_raw
+            full_segmented = load_project_segmented_subtitles(params["project_id"]) or segmented_subtitles
+            full_translated = load_project_subtitles(params["project_id"]) or []
+            replacements = {
+                str(cue.get("cue_id")): str(cue.get("translation") or "")
+                for cue in subtitles
+            }
+            for cue in full_translated:
+                cue_id = str(cue.get("cue_id"))
+                if cue_id in replacements:
+                    cue["translation"] = replacements[cue_id]
+                    cue["edited"] = True
+            proj["model_used"] = model_used
+            proj["target_lang"] = params["target_lang_code"]
+            save_subtitle_layers(proj, full_raw, full_segmented, full_translated)
+            update_project(proj)
+            result_pid = params["project_id"]
+        elif kind == "retranslate":
             projects_list = load_projects()
             proj = next((p for p in projects_list if p["id"] == params["project_id"]), None)
             if proj is None:
