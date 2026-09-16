@@ -680,6 +680,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Drag this subtitle layer horizontally or vertically. Arrow keys adjust; Home and End move it to the vertical bounds.",
         "zh": "可上下左右拖动当前字幕层；方向键微调，Home/End 移到上下边界。",
     },
+    "player.subtitle_position_reset": {
+        "en": "Reset subtitle positions",
+        "zh": "恢复字幕默认位置",
+    },
     "player.hover_lookup": {
         "en": "Looking up in dictionary…",
         "zh": "正在查询词典…",

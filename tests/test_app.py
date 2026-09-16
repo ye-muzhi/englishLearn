@@ -1111,6 +1111,7 @@ def test_subtitle_learning_interaction_contract():
     check("video overlay words are hoverable", "subOrig.innerHTML = hoverMarkup(cur.text)" in html)
     check("video size and timing live in the player settings menu", 'id="subtitleSettingsMenu"' in html and 'id="videoSubFontSize"' in html and 'id="listSubFontSize"' in html and "englishLearn.videoSubtitleScale" in html and "englishLearn.listSubtitleScale" in html)
     check("video subtitle layers can be dragged independently in both axes", 'id="subOrigDragHandle"' in html and 'id="subTransDragHandle"' in html and "拖动原文字幕" in html and "拖动译文字幕" in html and "englishLearn.videoSubtitleOriginalX" in html and "englishLearn.videoSubtitleTranslationY" in html and "ArrowLeft" in html and "pointerdown" in html)
+    check("subtitle positions can be restored from player settings", 'id="settingsPositionReset"' in html and "resetVideoSubtitlePositions(true)" in html and "恢复字幕默认位置" in html)
     check("subtitle timing can be adjusted in 0.1-second steps", 'id="subtitleOffset"' in html and 'step="0.1"' in html and 'id="subtitleOffsetEarlier"' in html and 'id="subtitleOffsetLater"' in html)
     timing_block = html.split('<div class="subtitle-settings-menu"', 1)[1].split('</div>', 1)[0]
     subtitle_tools_block = html.split('<div class="subtitle-tools"', 1)[1].split('</div>', 1)[0]

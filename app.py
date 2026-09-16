@@ -1089,6 +1089,7 @@ PLAYER_HTML = """<!DOCTYPE html>
           <input id="videoSubFontSize" type="range" min="80" max="200" step="5" value="100" aria-label="__VIDEO_FONT_SIZE__">
           <output id="videoSubFontValue">100%</output>
         </div>
+        <button type="button" class="subtitle-setting-row" id="settingsPositionReset"><span>__SUBTITLE_POSITION_RESET__</span><span class="setting-state">↺</span></button>
         <div class="subtitle-setting-divider"></div>
         <div class="subtitle-setting-control" role="group" aria-label="__SUBTITLE_TIMING_CONTROLS__" title="__SUBTITLE_TIMING_HINT__">
           <label for="subtitleOffset">__SUBTITLE_TIMING__</label>
@@ -1289,6 +1290,7 @@ PLAYER_HTML = """<!DOCTYPE html>
   var settingsOriginalToggle = $('settingsOriginalToggle'), settingsOriginalState = $('settingsOriginalState');
   var settingsTranslationToggle = $('settingsTranslationToggle'), settingsTranslationState = $('settingsTranslationState');
   var settingsWordLookupToggle = $('settingsWordLookupToggle'), settingsWordLookupState = $('settingsWordLookupState');
+  var settingsPositionReset = $('settingsPositionReset');
   var listBilingualPanelBtn = $('listBilingualPanelBtn');
   var speedBtn = $('speedBtn'), onlineSpeedBtn = $('onlineSpeedBtn'), speedMenu = $('speedMenu');
   var fsBtn = $('fsBtn');
@@ -1481,6 +1483,12 @@ PLAYER_HTML = """<!DOCTYPE html>
     x: readPanelRatio(VIDEO_TRANSLATION_X_KEY, 50, 5, 95),
     y: readPanelRatio(VIDEO_TRANSLATION_Y_KEY, Math.max(8, legacySubtitleY - 10), 8, 92)
   };
+  function resetVideoSubtitlePositions(persist) {
+    videoOriginalPosition.x = 50; videoOriginalPosition.y = 80;
+    videoTranslationPosition.x = 50; videoTranslationPosition.y = 70;
+    applyVideoSubtitlePosition('original', videoOriginalPosition, persist);
+    applyVideoSubtitlePosition('translation', videoTranslationPosition, persist);
+  }
   var draggingSubtitle = null, subtitlePointerId = null;
   function applyVideoSubtitlePosition(kind, position, persist) {
     var target = kind === 'original' ? videoOriginalPosition : videoTranslationPosition;
@@ -1528,6 +1536,9 @@ PLAYER_HTML = """<!DOCTYPE html>
   applyVideoSubtitlePosition('translation', videoTranslationPosition, false);
   attachSubtitleDrag('original', subOrigDragHandle, subOrigLayer, videoOriginalPosition);
   attachSubtitleDrag('translation', subTransDragHandle, subTransLayer, videoTranslationPosition);
+  if (settingsPositionReset) settingsPositionReset.addEventListener('click', function(){
+    resetVideoSubtitlePositions(true);
+  });
   document.addEventListener('pointermove', function(e) {
     if (draggingSubtitle && e.pointerId === subtitlePointerId) updateVideoSubtitlePosition(e);
   });
@@ -2421,7 +2432,7 @@ PLAYER_HTML = """<!DOCTYPE html>
   speedBtn.addEventListener('click', toggleSpeedMenu);
   if (onlineSpeedBtn) onlineSpeedBtn.addEventListener('click', toggleSpeedMenu);
   document.addEventListener('click', function(e) {
-    if (!speedMenu.contains(e.target) && e.target !== speedBtn) speedMenu.classList.remove('show');
+    if (!speedMenu.contains(e.target) && e.target !== speedBtn && e.target !== onlineSpeedBtn) speedMenu.classList.remove('show');
   });
   var speedItems = document.querySelectorAll('.speed-item');
   function setRate(rate) {
@@ -2775,6 +2786,7 @@ def build_player_html(
         .replace("__SUBTITLE_DRAG_ORIGINAL__", t("player.subtitle_drag_original", lang))
         .replace("__SUBTITLE_DRAG_TRANSLATION__", t("player.subtitle_drag_translation", lang))
         .replace("__SUBTITLE_DRAG_HINT__", t("player.subtitle_drag_hint", lang))
+        .replace("__SUBTITLE_POSITION_RESET__", t("player.subtitle_position_reset", lang))
         .replace("__HOVER_LOOKUP__", t("player.hover_lookup", lang))
         .replace("__HOVER_NO_RESULT__", t("player.hover_no_result", lang))
         .replace("__HOVER_AI_HINT__", t("player.hover_ai_hint", lang))
