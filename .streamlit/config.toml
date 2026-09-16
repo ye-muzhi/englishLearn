@@ -1,0 +1,23 @@
+[theme]
+base = "dark"
+primaryColor = "#8B7CF6"
+backgroundColor = "#0F0F0F"
+secondaryBackgroundColor = "#181818"
+textColor = "#F1F1F1"
+borderColor = "#303030"
+baseRadius = "medium"
+buttonRadius = "medium"
+showWidgetBorder = true
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Transformers exposes hundreds of lazy vision modules. Streamlit's source
+# watcher probes them all and floods the terminal with optional torchvision
+# import errors even though this app only uses a text model.
+fileWatcherType = "none"
+runOnSave = false

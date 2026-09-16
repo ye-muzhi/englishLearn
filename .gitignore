@@ -1,0 +1,29 @@
+# User data, downloaded media, dictionaries, models, and credentials
+work/*
+!work/.gitkeep
+
+# Local runtimes and caches
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local editor/agent settings
+.DS_Store
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# Build artifacts and logs
+dist/
+build/
+*.log
+*.pid
+
+# Local environment overrides
+.env
+.env.*
+!.env.example
