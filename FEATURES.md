@@ -8,7 +8,7 @@ Streamlit app that downloads/extracts video, transcribes with Whisper, segments 
 
 1. **Home** (`home_page`) — project library + main panel
 2. **Settings** (`settings_page`) — full-width configuration
-3. **Collections** (`collections_page`) — global wordbook + favorites
+3. **Notes** (`notes_page`) — AI/manual learning notes + wordbook
 
 ---
 
@@ -30,12 +30,12 @@ Streamlit app that downloads/extracts video, transcribes with Whisper, segments 
   - When 🔄 is shown, an inline progress bar + step label also render.
 - **Deletion**:
   - Deleting one project permanently removes its subtitle files, app-managed
-    downloaded/uploaded video and audio, project-scoped wordbook/favorites,
+    downloaded/uploaded video and audio, project-scoped notes/wordbook,
     and its library record. A local source file outside `work/` is never
     deleted.
   - The project-library trash menu provides **Delete all learning data**. It
     requires an acknowledgement, is disabled while imports run, and removes
-    all projects, managed media, subtitles, wordbook entries, and favorites.
+    all projects, managed media, subtitles, notes, and wordbook entries.
     Model downloads, presets, and app settings remain intact.
 
 ### Main workspace (`_render_home`)
@@ -211,14 +211,37 @@ Credential preflight:
 
 ---
 
-## Collections Page (`collections_page`)
+## Notes Page (`notes_page`)
 
-`st.tabs(["📖 Wordbook", "⭐ Favorites"])`:
+`st.tabs(["📝 All notes", "📖 Wordbook"])`:
 
+- **Notes tab**: searchable learning-note cards with title, source subtitle,
+  project/timestamp, tags, editable body, delete, and "open in player".
+  A manual-note form supports both standalone notes and notes linked to an
+  existing project.
 - **Wordbook tab**: search box, count, list of word cards (word, POS, translation, pronunciation, other_meanings, context, source project, delete, "open in player").
-- **Favorites tab**: search box, count, list of sentence cards (text, translation, timestamp, source project, delete, "open in player").
 
 "Open in player" loads the source project and seeks to the saved timestamp.
+
+### Contextual note workflow
+
+1. The player pencil or a subtitle-row pencil pauses playback and captures the
+   current timestamp plus the active source/translated sentence.
+2. An inline composer appears below that same project. The learner may record
+   an idea, type it, or combine both.
+3. Voice is transcribed locally with the selected Whisper model. Transcription
+   and AI refinement run in a persisted background task, so Streamlit reruns do
+   not block playback or lose progress.
+4. An instruction-capable OpenAI/Ollama preset returns an editable title, note,
+   summary, key points, vocabulary, and tags. Hy-MT2 is translation-only, so it
+   preserves the transcript as an honest editable draft instead of fabricating
+   an AI-refined result.
+5. The learner reviews and edits the result before saving. Temporary recording
+   files are removed when processing is consumed; API credentials are never
+   persisted in the task file.
+6. Existing sentence favorites are copied into Notes exactly once on upgrade.
+   The legacy file is retained for rollback compatibility, so no historical
+   learning data becomes inaccessible when the old Collections page disappears.
 
 ---
 
@@ -227,12 +250,14 @@ Credential preflight:
 Bilibili-style custom player:
 - 58%/42% true split between video and right panel; the list consumes its own column and never covers the video.
 - Subtitle overlay at bottom (max-width 96%).
-- Right panel tabs: Subtitles / Favorites / Wordbook.
+- Right panel tabs: Subtitles / Notes / Wordbook.
 - The subtitle header keeps high-frequency follow/bilingual controls visible.
   Search and list text size are progressively disclosed behind one tool button;
   Ctrl/Cmd+F focuses incremental source/translation search and Escape clears it.
 - Click subtitle row → seek without starting playback; the learner controls play explicitly.
-- ⭐ button per subtitle → toggle favorite.
+- ✎ button per subtitle → pause and open a note composer with that sentence and timestamp.
+- A player-level ✎ control captures the currently active subtitle, so a note
+  can also begin from the learner's exact playback position.
 - Text selection remains native so a learner can select an entire sentence without a popup interrupting it.
 - Hold ArrowRight → 3× speed after 400ms.
 - Video subtitle visibility, video bilingual display, and subtitle-list
@@ -247,7 +272,7 @@ Bilibili-style custom player:
   slider from −5.0s to +5.0s, plus −0.1s, +0.1s, and Reset controls. Negative
   values advance subtitles; positive values delay them. It updates the overlay
   and active subtitle row immediately without moving playback, and clicking a
-  subtitle/favorite/word context seeks to its corrected video time. The
+  subtitle/note/word context seeks to its corrected video time. The
   selected value is saved to the project and restored when it is reopened.
 - Hovering a source-language word for 200ms highlights it only. Clicking the
   word opens a compact dictionary card. It checks the local wordbook/cache
@@ -277,8 +302,7 @@ The learning player owns three layout states and must behave identically for
 local video and YouTube online playback:
 
 1. **Overlay view (default)** — video always uses the full learning viewport;
-   the subtitle/favorites/wordbook panel floats over its right edge with a dark
-   translucent mask.
+   the subtitle/notes/wordbook panel occupies its own resizable right column.
 2. **Video focus** — dragging the subtitle separator to the outer edge hides
    the panel; a narrow edge restore control remains visible.
 3. **Immersive fullscreen** — the complete learning shell (video plus the right
@@ -338,8 +362,8 @@ Acceptance checklist:
 | P-16 | Click subtitle row while paused | Player seeks to the row timestamp and remains paused |
 | P-20 | Adjust subtitle timing | Overlay and active row shift immediately; video playhead does not move |
 | P-21 | Reopen a project after timing adjustment | Its saved −5.0s to +5.0s timing offset is restored |
-| P-22 | Click subtitle/favorite after timing adjustment | Seek lands on the corrected subtitle position |
-| P-23 | Delete one project | Project subtitles, managed media, words, and favorites are removed; external local source remains |
+| P-22 | Click subtitle/note/word context after timing adjustment | Seek lands on the corrected subtitle position |
+| P-23 | Delete one project | Project subtitles, managed media, words, and notes are removed; external local source remains |
 | P-24 | Delete all learning data | Acknowledgement is required; all project/media/collection data clears while settings/models remain |
 | P-25 | Attempt delete all during import | Action is disabled and explains that the active task must finish |
 | P-17 | Click a word with a dictionary entry | Dictionary definition is shown with its free translation, without blocking the player |
@@ -349,7 +373,7 @@ Acceptance checklist:
 | P-17 | Click a highlighted source word in list/overlay | A button-free dictionary card appears near the word and stays inside player viewport |
 | P-18 | Drag subtitle size control | List and overlay font sizes change continuously and the value persists |
 | P-19 | Adjust playback speed | Local and online adapters receive the selected rate without a duplicate timeline |
-| P-20 | Click paragraph star | Exactly one favorite is added/removed and the row icon updates after reload |
+| P-20 | Click subtitle pencil | Playback pauses and a project-scoped note composer opens with the sentence and timestamp |
 | P-21 | Dictionary lookup takes longer than 2 seconds | Lookup is aborted and the card shows a retry hint |
 | P-22 | Open a new project form | "Local complete mode (default)" is visibly selected, with its download/ASR/native-player consequence stated |
 | P-23 | Select online captions mode and submit a valid YouTube link | The saved project is `playback_mode=online`, has no downloaded video path, and opens with the YouTube embed |
@@ -372,27 +396,27 @@ Acceptance checklist:
 
 Reads URL query params sent from iframe:
 - `action=translate_word&word=...&context=...&time=...&subtitle_id=...&project_id=...`
+- `action=open_note&text=...&translation=...&time=...&subtitle_id=...&project_id=...`
 - `action=delete_word&id=...`
-- `action=toggle_favorite&subtitle_id=...&project_id=...`
-- `action=delete_favorite&id=...`
+- Legacy `toggle_favorite` / `delete_favorite` URLs remain readable for data
+  compatibility, but no current page exposes a sentence-favorite control.
 - `action=seek&time=...`
 
 Processed before render, then params cleared and `st.rerun()`.
 
-### Dictionary and collection workflow
+### Dictionary, wordbook, and note workflow
 
 Selecting a sentence does not open the dictionary; clicking one word does. The
 compact dictionary card contains a star for adding/removing the current word
 from the Wordbook, available phonetics and pronunciation buttons, Chinese
-translations, and multiple English definitions. Sentence favorites remain on
-each subtitle row's star.
+translations, and multiple English definitions. Sentence-level learning ideas
+use the subtitle pencil and are stored as editable notes instead of favorites.
 
-Both word and sentence writes use the loopback player API and update the iframe
-state directly. Because Streamlit isolates the player in an opaque-origin
-iframe, writes use a one-pixel media receipt rather than a cross-origin fetch;
-this follows the same permitted resource path as the local video stream. They
-do not navigate or rerun Streamlit, so playback position and immersive
-fullscreen remain unchanged.
+Wordbook writes use the loopback player API and update the iframe state
+directly. Because Streamlit isolates the player in an opaque-origin iframe,
+writes use a one-pixel media receipt rather than a cross-origin fetch. Opening
+a note intentionally pauses and refreshes the host once to mount Streamlit's
+native recorder; the source project, timestamp, and draft are restored.
 
 Lookup order:
 
@@ -433,10 +457,9 @@ Action guarantees:
 - Legacy URL-dispatched collection actions remain supported, but current
   player collection writes use bounded local media-receipt requests.
 - Empty/failed translations are not written as successful wordbook entries.
-- Adding a word or favorite preserves the source timestamp without reloading.
-- Duplicate word actions update the existing matching entry; favorite actions
-  toggle one unique project/subtitle pair.
-- Wordbook and favorite entries from online projects can reopen the online
+- Adding a word or note preserves the source timestamp.
+- Duplicate word actions update the existing matching entry.
+- Wordbook and note entries from online projects can reopen the online
   player at the stored timestamp without requiring a local video file.
 
 Acceptance checklist:
@@ -447,11 +470,17 @@ Acceptance checklist:
 | C-02 | Click one source word | Dictionary card shows that word, available phonetics/audio, translations, multiple meanings, and a Wordbook star |
 | C-03 | Click a saved word | Saved data appears immediately and its star is active |
 | C-04 | Dictionary request times out | Card shows an actionable retry hint and remains non-blocking |
-| C-05 | Click paragraph star in fullscreen | Full subtitle is added/removed once, the row icon updates in place, and fullscreen remains active |
+| C-05 | Click subtitle pencil | Video pauses and the composer opens with the correct subtitle and timestamp |
 | C-06 | Open online collection entry | Online project loads and seeks without a local video path |
 | C-07 | Click the dictionary star | Word, meanings, phonetic, audio URL, context, and timestamp are saved without leaving the player |
 | C-08 | Play a pronunciation | Available UK/US or generic dictionary audio plays and the player/fullscreen state is unchanged |
 | C-09 | Install ECDICT mini | Subsequent matching lookups use its multiple Chinese meanings locally before online fallbacks |
+| N-01 | Click the player pencil between subtitle cues | Video pauses and the composer opens at the exact playback time with empty context allowed |
+| N-02 | Record an idea and submit | Transcription/refinement runs in the background and visibly reports its stage |
+| N-03 | Selected model cannot follow note instructions | An editable transcript draft appears with a clear warning; no content is lost |
+| N-04 | Edit the AI draft and save | The edited note appears in both the player Notes tab and global Notes page |
+| N-05 | Switch projects while a note is processing | The draft is never displayed or saved under the wrong project; returning restores its progress |
+| N-06 | Delete a project/delete all data | Its notes/all notes are removed with the same confirmation rules as other learning data |
 
 ---
 
@@ -462,11 +491,13 @@ work/
   projects.json              # project index
   model_presets.json         # LLM presets
   wordbook.json              # global wordbook entries
-  favorites.json             # global favorite entries
+  notes.json                 # global project-linked and standalone notes
+  note_tasks.json            # persisted public state for active note jobs
   dictionaries/
     ecdict.mini.csv          # optional MIT-licensed offline dictionary
     ecdict.db                # optional SQLite ECDICT alternative
   projects/{project_id}/
+    note_audio/              # temporary private recordings, removed after processing
     subtitles_raw.json       # pre-translation segments
     subtitles_translated.json
 ```

@@ -45,8 +45,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "zh": "把任何视频，变成可反复学习的一课。",
     },
     "app.start_body": {
-        "en": "Import a video, generate natural bilingual subtitles, then save the words and lines worth keeping.",
-        "zh": "导入视频，生成自然的双语字幕，再收藏真正值得复习的单词和句子。",
+        "en": "Import a video, generate natural bilingual subtitles, then capture the words and learning insights worth keeping.",
+        "zh": "导入视频，生成自然的双语字幕，再记录真正值得复习的单词和学习想法。",
     },
     "app.continue_learning": {
         "en": "Continue learning",
@@ -927,6 +927,162 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Open in player",
         "zh": "在播放器中打开",
     },
+    "notes.title": {
+        "en": "Notes",
+        "zh": "学习笔记",
+    },
+    "notes.capture": {
+        "en": "Pause and capture an idea",
+        "zh": "暂停并记录想法",
+    },
+    "notes.from_subtitle": {
+        "en": "Create a note from this subtitle",
+        "zh": "根据这句字幕记笔记",
+    },
+    "notes.project_empty": {
+        "en": "No notes for this project yet.",
+        "zh": "这个项目还没有笔记。",
+    },
+    "notes.empty": {
+        "en": "No learning notes yet. Pause a video and capture your first idea.",
+        "zh": "还没有学习笔记。播放视频时暂停并记录第一个想法吧。",
+    },
+    "notes.untitled": {
+        "en": "Untitled note",
+        "zh": "未命名笔记",
+    },
+    "notes.page_hint": {
+        "en": "Capture your own understanding, then revisit it in the original video context.",
+        "zh": "记录你自己的理解，并随时回到视频原位置复习。",
+    },
+    "notes.all_notes": {
+        "en": "All notes",
+        "zh": "全部笔记",
+    },
+    "notes.new_manual": {
+        "en": "Write a note",
+        "zh": "手写一条笔记",
+    },
+    "notes.no_project": {
+        "en": "Standalone note",
+        "zh": "独立笔记",
+    },
+    "notes.related_project": {
+        "en": "Related project",
+        "zh": "关联项目",
+    },
+    "notes.search": {
+        "en": "Search notes, subtitles, or tags...",
+        "zh": "搜索笔记、字幕或标签……",
+    },
+    "notes.composer_title": {
+        "en": "Capture a learning insight",
+        "zh": "记录学习想法",
+    },
+    "notes.composer_hint": {
+        "en": "The video is paused. Record your thought or type it, then let AI turn it into an editable note.",
+        "zh": "视频已暂停。你可以录下或写下想法，再让 AI 整理成可编辑的笔记。",
+    },
+    "notes.record": {
+        "en": "Record your idea",
+        "zh": "录下你的想法",
+    },
+    "notes.record_help": {
+        "en": "Recording stays on this device and is removed after processing.",
+        "zh": "录音保存在本机，处理完成后会自动删除。",
+    },
+    "notes.raw_idea": {
+        "en": "Your idea (optional when recording)",
+        "zh": "你的想法（录音时可不填）",
+    },
+    "notes.raw_placeholder": {
+        "en": "For example: Precisely can mean ‘exactly’; in this context it confirms what was just said...",
+        "zh": "例如：precisely 在这里更像“的确、正是如此”，也可以用 exactly 表达……",
+    },
+    "notes.refine": {
+        "en": "Transcribe and refine with AI",
+        "zh": "转写并让 AI 整理",
+    },
+    "notes.save_direct": {
+        "en": "Save without AI",
+        "zh": "直接保存",
+    },
+    "notes.note_title": {
+        "en": "Title",
+        "zh": "标题",
+    },
+    "notes.note_body": {
+        "en": "Note",
+        "zh": "笔记内容",
+    },
+    "notes.tags": {
+        "en": "Tags (comma separated)",
+        "zh": "标签（用逗号分隔）",
+    },
+    "notes.save": {
+        "en": "Save note",
+        "zh": "保存笔记",
+    },
+    "notes.save_changes": {
+        "en": "Save changes",
+        "zh": "保存修改",
+    },
+    "notes.saved": {
+        "en": "Note saved.",
+        "zh": "笔记已保存。",
+    },
+    "notes.cancel": {
+        "en": "Cancel",
+        "zh": "取消",
+    },
+    "notes.retry": {
+        "en": "Start over",
+        "zh": "重新整理",
+    },
+    "notes.edit": {
+        "en": "Edit",
+        "zh": "编辑",
+    },
+    "notes.delete": {
+        "en": "Delete",
+        "zh": "删除",
+    },
+    "notes.body_required": {
+        "en": "Write some note content before saving.",
+        "zh": "请先填写笔记内容。",
+    },
+    "notes.audio_too_large": {
+        "en": "This recording is too large. Keep a single note under 20 MB.",
+        "zh": "这段录音过大，单条笔记录音请控制在 20 MB 以内。",
+    },
+    "notes.stage_queued": {
+        "en": "Note queued…",
+        "zh": "笔记已进入处理队列……",
+    },
+    "notes.stage_transcribing": {
+        "en": "Transcribing your recording locally…",
+        "zh": "正在本地转写录音……",
+    },
+    "notes.stage_refining": {
+        "en": "AI is refining the note…",
+        "zh": "AI 正在整理笔记……",
+    },
+    "notes.stage_working": {
+        "en": "Processing the note…",
+        "zh": "正在处理笔记……",
+    },
+    "notes.job_missing": {
+        "en": "The note task is no longer available. Please try again.",
+        "zh": "笔记任务已不存在，请重新尝试。",
+    },
+    "notes.job_failed": {
+        "en": "Could not process the note: {error}",
+        "zh": "笔记处理失败：{error}",
+    },
+    "notes.draft_warning": {
+        "en": "AI refinement was unavailable. The transcript is preserved below for editing.",
+        "zh": "AI 整理暂不可用，已保留转写内容供你编辑。",
+    },
     "sidebar.clear_reset": {
         "en": "Clear & Reset",
         "zh": "清除并重置",
@@ -986,16 +1142,16 @@ STRINGS: dict[str, dict[str, str]] = {
         "zh": "永久删除此项目？",
     },
     "projects.delete_note": {
-        "en": "Its subtitles, app-managed video/audio, saved words, and favorites will be deleted. A local original outside the app work folder is kept.",
-        "zh": "会删除字幕、应用管理的视频/音频、生词和收藏；应用工作目录外的本地原文件会保留。",
+        "en": "Its subtitles, app-managed video/audio, saved words, and notes will be deleted. A local original outside the app work folder is kept.",
+        "zh": "会删除字幕、应用管理的视频/音频、生词和笔记；应用工作目录外的本地原文件会保留。",
     },
     "projects.delete_all": {
         "en": "Delete all learning data",
         "zh": "删除全部学习数据",
     },
     "projects.delete_all_confirm": {
-        "en": "This permanently deletes every project, downloaded/uploaded media, subtitles, wordbook entries, and favorites.",
-        "zh": "这会永久删除全部项目、已下载/上传的视频、字幕、生词本和收藏。",
+        "en": "This permanently deletes every project, downloaded/uploaded media, subtitles, wordbook entries, and notes.",
+        "zh": "这会永久删除全部项目、已下载/上传的视频、字幕、生词本和学习笔记。",
     },
     "projects.delete_all_note": {
         "en": "Model downloads, presets, and app settings are kept.",
@@ -1006,8 +1162,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "zh": "我了解此操作无法撤销。",
     },
     "projects.delete_all_busy": {
-        "en": "Wait for running imports to finish before deleting all learning data.",
-        "zh": "请等待正在导入的任务完成后，再删除全部学习数据。",
+        "en": "Wait for running background tasks to finish before deleting all learning data.",
+        "zh": "请等待正在运行的后台任务完成后，再删除全部学习数据。",
     },
     "projects.delete_all_done": {
         "en": "Deleted {n} projects and all learning data.",

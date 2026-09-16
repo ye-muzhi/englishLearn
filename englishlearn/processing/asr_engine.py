@@ -55,7 +55,7 @@ class ASREngine:
             compute_type=self._compute_type,
         )
 
-    def transcribe(self, audio_path: str) -> list[dict]:
+    def transcribe(self, audio_path: str, initial_prompt: str | None = None) -> list[dict]:
         """Transcribe *audio_path* (16 kHz mono WAV) and return a list of
         subtitle segments:
 
@@ -75,7 +75,7 @@ class ASREngine:
             vad_parameters={"min_silence_duration_ms": 300},
             # Gentle nudge for Whisper to produce punctuated, capitalised
             # output — which dramatically helps the sentence segmenter.
-            initial_prompt="Hello, welcome to today's presentation.",
+            initial_prompt=initial_prompt or "Hello, welcome to today's presentation.",
         )
 
         results = []

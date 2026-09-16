@@ -431,13 +431,13 @@ def test_pipeline_runner_persistence():
 
 
 # ---------------------------------------------------------------------------
-# Test 7: collections store CRUD + page render
+# Test 7: notes/wordbook store CRUD + page render
 # ---------------------------------------------------------------------------
 
-def test_collections_page():
-    print("\n[test_collections_page]")
+def test_notes_page():
+    print("\n[test_notes_page]")
     # AppTest in this Streamlit version does not expose st.page_link, so we
-    # cannot navigate to the Collections page via the test harness. Instead:
+    # cannot navigate to the Notes page via the test harness. Instead:
     #   (a) verify the home page renders without error
     #   (b) verify CollectionStore CRUD works on a temp file
     at = fresh_app()
@@ -448,30 +448,30 @@ def test_collections_page():
     from englishlearn.storage.collections_store import CollectionStore
 
     with tempfile.TemporaryDirectory() as tmp:
-        store = CollectionStore(os.path.join(tmp, "wordbook.json"))
+        store = CollectionStore(os.path.join(tmp, "notes.json"))
         check("empty store returns []", store.load() == [])
 
-        added = store.add({"word": "hello", "translation": "你好"})
+        added = store.add({"title": "Precisely", "body": "可以表示“的确”。"})
         check("add assigns id + created_at",
-              "id" in added and "created_at" in added and added["word"] == "hello")
+              "id" in added and "created_at" in added and added["title"] == "Precisely")
 
-        found = store.find(word="hello")
+        found = store.find(title="Precisely")
         check("find retrieves entry", found is not None and found["id"] == added["id"])
 
         items = store.load()
-        check("persisted to disk", len(items) == 1 and items[0]["word"] == "hello")
+        check("persisted to disk", len(items) == 1 and items[0]["body"] == "可以表示“的确”。")
 
-        store.update(added["id"], translation="您好")
+        store.update(added["id"], body="也可以用 exactly 表达。")
         check("update mutates fields",
-              store.find(word="hello")["translation"] == "您好")
+              store.find(title="Precisely")["body"] == "也可以用 exactly 表达。")
 
         store.remove(added["id"])
-        check("remove deletes entry", store.find(word="hello") is None)
+        check("remove deletes entry", store.find(title="Precisely") is None)
 
         # remove_if with criteria
-        store.add({"word": "a", "pos": "noun"})
-        store.add({"word": "b", "pos": "verb"})
-        removed = store.remove_if(pos="noun")
+        store.add({"title": "a", "project_id": "p1"})
+        store.add({"title": "b", "project_id": "p2"})
+        removed = store.remove_if(project_id="p1")
         check("remove_if filters by criteria", removed and len(store.load()) == 1)
 
 
@@ -1120,8 +1120,14 @@ def test_subtitle_learning_interaction_contract():
     check("subtitle timing updates active overlay and row together", "video.currentTime - subtitleOffset" in html and "lastActiveId = -1" in html)
     check("subtitle timing persists per project without navigation", "englishLearn.subtitleOffset." in html and "/api/subtitle-offset" in html and "fetchJsonWithin(url, 1200)" in html)
     check("online speed control is available without custom timeline", 'id="onlineSpeedBtn"' in html and '.player.online .controls' in html)
-    check("favorite action locks the clicked star", "favBtn.disabled = true" in html and "aria-label=\"' + (isFav?" in html)
-    check("sentence favorite saves without leaving fullscreen", "postCollection('/api/favorite/toggle'" in html and "sendAction('toggle_favorite'" not in html)
+    check("player note action pauses before opening the composer",
+          'id="noteBtn"' in html and 'id="onlineNoteBtn"' in html
+          and "noteBtn.addEventListener('click', openNoteComposer)" in html
+          and "onlineNoteBtn.addEventListener('click', openNoteComposer)" in html
+          and "video.pause()" in html and "sendAction('open_note'" in html)
+    check("subtitle note action captures the source sentence without toggling playback",
+          'class="note-row-btn"' in html and "subtitle_id: sub.id" in html
+          and "translation: sub.translation || ''" in html)
     check("collection writes use the fullscreen-safe media bridge",
           "/api/collection-pixel?action=" in html
           and "var image = new Image(1, 1)" in html
@@ -1240,6 +1246,21 @@ def test_player_collection_actions_are_persistent_and_idempotent(monkeypatch):
         at.run()
         words = json.loads(open(wordbook_path, encoding="utf-8").read())
         check("duplicate word action updates", len(words) == 1 and words[0]["translation"] == "障碍物")
+
+        note_action = {
+            "action": "open_note", "subtitle_id": "7",
+            "text": "An invisible barrier", "translation": "一道无形的屏障",
+            "time": "12.5", "project_id": project["id"],
+        }
+        at.query_params = dict(note_action)
+        at.run()
+        check("note action is consumed", at.query_params == {})
+        check("note action opens the project-scoped composer", at.session_state.show_note_composer)
+        check("note action preserves sentence context",
+              at.session_state.note_draft["source_text"] == "An invisible barrier"
+              and at.session_state.note_draft["source_translation"] == "一道无形的屏障")
+        check("note action preserves timestamp", at.session_state.note_draft["time"] == 12.5)
+        check("note composer renders without exception", len(at.exception) == 0, str(at.exception))
 
         favorite_action = {
             "action": "toggle_favorite", "subtitle_id": "7",
@@ -1423,7 +1444,7 @@ def main():
         test_open_project_detail,
         test_corrupt_subtitles_handling,
         test_pipeline_runner_persistence,
-        test_collections_page,
+        test_notes_page,
         test_video_server_allowlist,
         test_subtitle_parsers,
         test_mp4_container_extension_is_normalized,

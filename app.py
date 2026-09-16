@@ -58,6 +58,7 @@ from englishlearn.storage.subtitle_editor import (
 )
 from englishlearn.paths import work_dir
 from englishlearn.processing import pipeline_runner
+from englishlearn.notes import note_agent, migrate_legacy_favorites
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -73,6 +74,8 @@ WORK_DIR = str(work_dir())
 
 wordbook_store = CollectionStore(os.path.join(WORK_DIR, "wordbook.json"))
 favorites_store = CollectionStore(os.path.join(WORK_DIR, "favorites.json"))
+notes_store = CollectionStore(os.path.join(WORK_DIR, "notes.json"))
+migrate_legacy_favorites(favorites_store, notes_store)
 
 
 def _apply_product_theme() -> None:
@@ -262,6 +265,21 @@ def _apply_product_theme() -> None:
             border-radius:8px !important; background:transparent !important; padding:.2rem 0 !important;
             border:0 !important; min-height:34px !important;
             text-align:left; justify-content:flex-start; font-weight:700;
+        }
+        [class*="st-key-learning_note_composer"] {
+            margin:.8rem 0 1.15rem; padding:.35rem .35rem .2rem;
+            border:1px solid rgba(139,124,246,.42) !important;
+            border-radius:16px !important;
+            background:linear-gradient(145deg, rgba(139,124,246,.10), rgba(39,39,39,.72));
+            box-shadow:0 14px 38px rgba(0,0,0,.24);
+        }
+        [class*="st-key-note_card_"] {
+            border-color:var(--line) !important; border-radius:14px !important;
+            background:var(--panel); margin-bottom:.65rem;
+        }
+        [class*="st-key-note_card_"] h3 {
+            font-size:1.18rem !important; line-height:1.35 !important;
+            letter-spacing:-.01em;
         }
         .watch-title { font-size:1.28rem; line-height:1.35; font-weight:750; letter-spacing:-.02em; margin:.75rem 0 .15rem; }
         .watch-meta { color:var(--muted); font-size:.82rem; margin-bottom:.35rem; }
@@ -470,6 +488,12 @@ DEFAULTS = {
     "collection_notice": None,       # success notice after a player collection action
     "collection_error": None,        # actionable collection failure shown after rerun
     "pending_ai_lookup": None,       # reopen a word card after a successful AI lookup
+    "show_note_composer": False,     # project-scoped voice/manual note composer
+    "note_draft": None,              # subtitle/time context captured by the player
+    "note_job_id": None,             # background transcription/refinement task
+    "note_result": None,             # editable result returned by the note agent
+    "note_job_error": None,          # transcription/refinement failure shown inline
+    "note_composer_nonce": 0,        # resets recorder/input widgets between notes
     "seen_task_completions": [],     # completion notices already shown in this tab
     "scroll_main_to_top": False,     # one-shot reset when entering a different workspace view
 }
@@ -498,9 +522,13 @@ def reset_state():
 
 def _clear_all_learning_data() -> dict[str, int]:
     """Clear all learner-created content while retaining app configuration/model files."""
+    note_agent.configure(WORK_DIR)
+    if not note_agent.clear_finished_tasks():
+        raise RuntimeError(t("projects.delete_all_busy", lang))
     result = delete_all_project_data()
     wordbook_store.save([])
     favorites_store.save([])
+    notes_store.save([])
     st.session_state.projects = []
     st.session_state.selected_project_id = None
     st.session_state.current_project = None
@@ -513,6 +541,11 @@ def _clear_all_learning_data() -> dict[str, int]:
     st.session_state.show_new_task = False
     st.session_state.collection_notice = None
     st.session_state.collection_error = None
+    st.session_state.show_note_composer = False
+    st.session_state.note_draft = None
+    st.session_state.note_job_id = None
+    st.session_state.note_result = None
+    st.session_state.note_job_error = None
     return result
 
 
@@ -652,6 +685,13 @@ PLAYER_HTML = """<!DOCTYPE html>
   .online-speed:hover { background:rgba(124,110,230,.85); }
   .player.online .online-speed { display:block; }
   .player.online .speed-menu { bottom:auto; top:48px; right:12px; }
+  .online-note {
+    display:none; position:absolute; top:12px; right:112px; z-index:14;
+    width:34px; height:30px; border:1px solid rgba(255,255,255,.3); border-radius:7px;
+    color:#fff; background:rgba(0,0,0,.72); cursor:pointer; font-size:16px;
+  }
+  .online-note:hover { background:rgba(124,110,230,.85); }
+  .player.online .online-note { display:block; }
   .online-subtitle-settings {
     display:none; position:absolute; top:12px; right:12px; z-index:14;
     width:34px; height:30px; border:1px solid rgba(255,255,255,.3); border-radius:7px;
@@ -936,13 +976,12 @@ PLAYER_HTML = """<!DOCTYPE html>
   .sub-original { font-size:calc(14px * var(--list-subtitle-scale, 1)); line-height:1.5; color:var(--text); word-break:break-word; }
   .sub-translation { font-size:calc(13px * var(--list-subtitle-scale, 1)); line-height:1.5; color:var(--accent-soft); margin-top:3px; word-break:break-word; }
   .sub-translation:empty::after { content:"__PENDING_TRANSLATION__"; color:#555; font-style:italic; }
-  .fav-btn {
+  .note-row-btn {
     flex:0 0 26px; background:none; border:none; cursor:pointer;
     font-size:15px; color:var(--text-3); padding:2px; border-radius:4px;
     transition:all 0.15s; align-self:flex-start;
   }
-  .fav-btn:hover { color:var(--gold); transform:scale(1.2); }
-  .fav-btn.faved { color:var(--gold); }
+  .note-row-btn:hover { color:var(--accent-soft); transform:scale(1.12); }
 
   /* Favorite / wordbook items */
   .item-row {
@@ -1071,6 +1110,7 @@ PLAYER_HTML = """<!DOCTYPE html>
     <div class="player __PLAYER_CLASS__" id="player">
       __VIDEO_ELEMENT__
       <div class="center-play show" id="centerPlay"></div>
+      <button class="online-note" id="onlineNoteBtn" title="__NOTE_CAPTURE__" aria-label="__NOTE_CAPTURE__">&#9998;</button>
       <button class="online-speed" id="onlineSpeedBtn" title="__SPEED__">1.0x</button>
       <button class="online-subtitle-settings" id="onlineSubtitleSettingsBtn" title="__SUBTITLE_SETTINGS__" aria-label="__SUBTITLE_SETTINGS__">&#9881;</button>
       <div class="sub-overlay" id="subOverlay">
@@ -1129,6 +1169,7 @@ PLAYER_HTML = """<!DOCTYPE html>
           </div>
           <span class="time-display"><span id="current">0:00</span> / <span id="duration">0:00</span></span>
           <span class="spacer"></span>
+          <button class="ctrl-btn" id="noteBtn" title="__NOTE_CAPTURE__" aria-label="__NOTE_CAPTURE__">&#9998;</button>
           <button class="ctrl-btn active" id="subToggle" style="font-weight:bold;" title="__SETTINGS_SUBTITLES__">CC</button>
           <button class="ctrl-btn" id="subtitleSettingsBtn" title="__SUBTITLE_SETTINGS__" aria-label="__SUBTITLE_SETTINGS__">&#9881;</button>
           <button class="ctrl-btn" id="speedBtn" title="Speed">1.0x</button>
@@ -1155,7 +1196,7 @@ PLAYER_HTML = """<!DOCTYPE html>
     </div>
     <div class="tab-bar">
       <button class="tab active" data-tab="subs">&#128196; __TAB_SUBS__</button>
-      <button class="tab" data-tab="favs">&#11088; __TAB_FAVS__ <span class="tab-count" id="favCount"></span></button>
+      <button class="tab" data-tab="notes">&#128221; __TAB_NOTES__ <span class="tab-count" id="noteCount"></span></button>
       <button class="tab" data-tab="words">&#128214; __TAB_WORDS__ <span class="tab-count" id="wordCount"></span></button>
     </div>
     <div class="subtitle-tools" id="subtitleTools">
@@ -1169,7 +1210,7 @@ PLAYER_HTML = """<!DOCTYPE html>
 
     <div class="tab-content active" id="content-subs" role="tabpanel" aria-label="__TAB_SUBS__" tabindex="0"></div>
     <div class="subtitle-search-empty" id="subtitleSearchEmpty">__SUBTITLE_SEARCH_EMPTY__</div>
-    <div class="tab-content" id="content-favs" role="tabpanel" aria-label="__TAB_FAVS__"></div>
+    <div class="tab-content" id="content-notes" role="tabpanel" aria-label="__TAB_NOTES__"></div>
     <div class="tab-content" id="content-words" role="tabpanel" aria-label="__TAB_WORDS__"></div>
   </div>
   <button class="panel-edge-restore" id="panelRestoreBtn" title="__PANEL_RESTORE__" aria-label="__PANEL_RESTORE__">&#8249;</button>
@@ -1187,7 +1228,7 @@ PLAYER_HTML = """<!DOCTYPE html>
 </div>
 
 <script type="application/json" id="subtitle-data">__SUBTITLE_JSON__</script>
-<script type="application/json" id="favorites-data">__FAVORITES_JSON__</script>
+<script type="application/json" id="notes-data">__NOTES_JSON__</script>
 <script type="application/json" id="wordbook-data">__WORDBOOK_JSON__</script>
 <script type="application/json" id="ai-lookup-data">__AI_LOOKUP_JSON__</script>
 
@@ -1215,7 +1256,7 @@ PLAYER_HTML = """<!DOCTYPE html>
   var INITIAL_SUBTITLE_OFFSET = __INITIAL_SUBTITLE_OFFSET__;
 
   var subtitles = JSON.parse(document.getElementById('subtitle-data').textContent);
-  var favorites = JSON.parse(document.getElementById('favorites-data').textContent);
+  var notes = JSON.parse(document.getElementById('notes-data').textContent);
   var wordbook = JSON.parse(document.getElementById('wordbook-data').textContent);
   var initialAiLookup = JSON.parse(document.getElementById('ai-lookup-data').textContent || 'null');
 
@@ -1298,6 +1339,7 @@ PLAYER_HTML = """<!DOCTYPE html>
   var subOverlay = $('subOverlay'), subOrig = $('subOrig'), subTrans = $('subTrans');
   var subOrigLayer = $('subOrigLayer'), subTransLayer = $('subTransLayer');
   var subOrigDragHandle = $('subOrigDragHandle'), subTransDragHandle = $('subTransDragHandle');
+  var noteBtn = $('noteBtn'), onlineNoteBtn = $('onlineNoteBtn');
   var subToggle = $('subToggle'), subtitleSettingsBtn = $('subtitleSettingsBtn');
   var onlineSubtitleSettingsBtn = $('onlineSubtitleSettingsBtn'), subtitleSettingsMenu = $('subtitleSettingsMenu');
   var settingsSubtitlesToggle = $('settingsSubtitlesToggle'), settingsSubtitlesState = $('settingsSubtitlesState');
@@ -1322,7 +1364,6 @@ PLAYER_HTML = """<!DOCTYPE html>
   var WORD_LOOKUP_ENABLED_KEY = 'englishLearn.wordLookupEnabled';
   var wordLookupEnabled = true;
   var lastActiveId = -1, ctrlTimer, currentRate = 1, autoFollow = true;
-  var favSubIds = {}; favorites.forEach(function(f){ favSubIds[f.subtitle_id] = f; });
   var hoverDictCache = {};
   var hoverIntentTimer = null, hoverIntentWord = null;
   var popupMode = 'lookup';
@@ -1895,13 +1936,7 @@ PLAYER_HTML = """<!DOCTYPE html>
         if (!pending) return;
         clearTimeout(pending.timer);
         delete collectionPending[requestId];
-        if (path === '/api/favorite/toggle') {
-          pending.resolve({
-            ok: true,
-            favorited: !favSubIds[String(payload.subtitle_id)],
-            entry: Object.assign({}, payload)
-          });
-        } else if (path === '/api/word/save') {
+        if (path === '/api/word/save') {
           pending.resolve({ ok: true, saved: true, entry: Object.assign({}, payload) });
         } else {
           pending.resolve({ ok: true });
@@ -2179,56 +2214,32 @@ PLAYER_HTML = """<!DOCTYPE html>
       row.dataset.searchText = ((sub.text || '') + ' ' + (sub.translation || '')).toLocaleLowerCase();
 
       var secs = Math.floor(sub.start), mins = Math.floor(secs/60), s = secs%60;
-      var isFav = !!favSubIds[sub.id];
-
       row.innerHTML =
         '<div class="sub-time">' + mins + ':' + (s<10?'0':'') + s + '</div>' +
         '<div class="sub-content">' +
           '<div class="sub-original">' + hoverMarkup(sub.text) + '</div>' +
           '<div class="sub-translation">' + esc(sub.translation||'') + '</div>' +
         '</div>' +
-        '<button type="button" class="fav-btn' + (isFav?' faved':'') + '" aria-label="' + (isFav?'Remove favorite':'Add favorite') + '" data-sub-id="' + sub.id + '">' + (isFav?'&#9733;':'&#9734;') + '</button>';
+        '<button type="button" class="note-row-btn" aria-label="__NOTE_FROM_SUBTITLE__" title="__NOTE_FROM_SUBTITLE__" data-sub-id="' + sub.id + '">&#9998;</button>';
 
       row.addEventListener('click', function(e) {
-        if (e.target.classList.contains('fav-btn')) return;
+        if (e.target.classList.contains('note-row-btn')) return;
         if (wordLookupEnabled && e.target.closest && e.target.closest('.sub-word')) return;
         if (window.getSelection().toString().trim()) return; // don't seek when selecting text
         setAutoFollow(true, false);
         video.currentTime = subtitleVideoTime(sub.start);
       });
 
-      var favBtn = row.querySelector('.fav-btn');
-      favBtn.addEventListener('click', function(e) {
+      var noteRowBtn = row.querySelector('.note-row-btn');
+      noteRowBtn.addEventListener('click', function(e) {
         e.stopPropagation();
-        if (favBtn.disabled) return;
-        favBtn.disabled = true;
-        postCollection('/api/favorite/toggle', {
+        video.pause();
+        sendAction('open_note', {
           subtitle_id: sub.id,
           text: sub.text,
           translation: sub.translation || '',
           time: sub.start,
           project_id: PROJECT_ID
-        }).then(function(result) {
-          if (!result || !result.ok) {
-            favBtn.title = '__ACTION_TIMEOUT__';
-            return;
-          }
-          if (result.favorited && result.entry) {
-            favorites.push(result.entry);
-            favSubIds[sub.id] = result.entry;
-          } else {
-            favorites = favorites.filter(function(item) {
-              return !(String(item.project_id) === String(PROJECT_ID) &&
-                String(item.subtitle_id) === String(sub.id));
-            });
-            delete favSubIds[sub.id];
-          }
-          favBtn.classList.toggle('faved', !!result.favorited);
-          favBtn.innerHTML = result.favorited ? '&#9733;' : '&#9734;';
-          favBtn.setAttribute('aria-label', result.favorited ? 'Remove favorite' : 'Add favorite');
-          renderFavorites();
-        }).finally(function() {
-          favBtn.disabled = false;
         });
       });
 
@@ -2238,51 +2249,31 @@ PLAYER_HTML = """<!DOCTYPE html>
   }
 
   // ===========================
-  // RENDER: Favorites tab
+  // RENDER: Project notes tab
   // ===========================
-  function renderFavorites() {
-    var container = $('content-favs');
-    var projFavs = favorites.filter(function(f){ return f.project_id === PROJECT_ID; });
-    $('favCount').textContent = projFavs.length ? '(' + projFavs.length + ')' : '';
+  function renderNotes() {
+    var container = $('content-notes');
+    var projectNotes = notes.filter(function(note){ return note.project_id === PROJECT_ID; });
+    $('noteCount').textContent = projectNotes.length ? '(' + projectNotes.length + ')' : '';
 
-    if (!projFavs.length) {
-      container.innerHTML = '<div class="empty-hint">__FAV_EMPTY__</div>';
+    if (!projectNotes.length) {
+      container.innerHTML = '<div class="empty-hint">__NOTE_EMPTY__</div>';
       return;
     }
     container.innerHTML = '';
-    projFavs.forEach(function(fav) {
+    projectNotes.slice().reverse().forEach(function(note) {
       var row = document.createElement('div');
       row.className = 'item-row';
-      var secs = Math.floor(fav.time||0), mins = Math.floor(secs/60), s = secs%60;
+      var secs = Math.floor(note.time||0), mins = Math.floor(secs/60), s = secs%60;
       row.innerHTML =
         '<div class="item-time">' + mins + ':' + (s<10?'0':'') + s + '</div>' +
         '<div class="item-main">' +
-          '<div class="item-text">' + esc(fav.text) + '</div>' +
-          '<div class="item-trans">' + esc(fav.translation||'') + '</div>' +
-        '</div>' +
-        '<button class="item-del" title="Remove">&times;</button>';
+          '<div class="item-word">' + esc(note.title || '__UNTITLED_NOTE__') + '</div>' +
+          '<div class="item-text">' + esc(note.summary || note.body || '') + '</div>' +
+        '</div>';
       row.querySelector('.item-main').addEventListener('click', function() {
-        video.currentTime = subtitleVideoTime(fav.time);
-        video.play().catch(function(){});
+        video.currentTime = subtitleVideoTime(note.time || 0);
         switchTab('subs');
-      });
-      row.querySelector('.item-del').addEventListener('click', function() {
-        postCollection('/api/favorite/delete', {
-          id: fav.id,
-          project_id: fav.project_id || PROJECT_ID,
-          subtitle_id: fav.subtitle_id
-        }).then(function(result) {
-          if (!result || !result.ok) return;
-          favorites = favorites.filter(function(item){ return item.id !== fav.id; });
-          delete favSubIds[fav.subtitle_id];
-          var sourceButton = document.querySelector('.fav-btn[data-sub-id="' + CSS.escape(String(fav.subtitle_id)) + '"]');
-          if (sourceButton) {
-            sourceButton.classList.remove('faved');
-            sourceButton.innerHTML = '&#9734;';
-            sourceButton.setAttribute('aria-label', 'Add favorite');
-          }
-          renderFavorites();
-        });
       });
       container.appendChild(row);
     });
@@ -2342,7 +2333,7 @@ PLAYER_HTML = """<!DOCTYPE html>
     });
   }
 
-  renderFavorites();
+  renderNotes();
   renderWordbook();
 
   // ===========================
@@ -2363,6 +2354,25 @@ PLAYER_HTML = """<!DOCTYPE html>
   function togglePlay() {
     if (video.paused) video.play().catch(function(){}); else video.pause();
   }
+  function openNoteComposer() {
+    video.pause();
+    var now = Number(video.currentTime || 0);
+    var active = subtitles.find(function(item){ return String(item.id) === String(lastActiveId); });
+    if (!active) {
+      active = subtitles.find(function(item) {
+        return now >= subtitleVideoTime(item.start) && now < subtitleVideoTime(item.end);
+      });
+    }
+    sendAction('open_note', {
+      project_id: PROJECT_ID,
+      time: now,
+      subtitle_id: active ? (active.cue_id || active.id) : '',
+      text: active ? (active.text || '') : '',
+      translation: active ? (active.translation || '') : ''
+    });
+  }
+  if (noteBtn) noteBtn.addEventListener('click', openNoteComposer);
+  if (onlineNoteBtn) onlineNoteBtn.addEventListener('click', openNoteComposer);
   playBtn.addEventListener('click', togglePlay);
   centerPlay.addEventListener('click', togglePlay);
   if (nativeVideo) nativeVideo.addEventListener('click', togglePlay);
@@ -2701,7 +2711,7 @@ def build_player_html(
     subtitles: list[dict],
     lang: str = "en",
     project_id: str = "",
-    favorites: list[dict] = None,
+    notes: list[dict] = None,
     wordbook: list[dict] = None,
     initial_seek: float = 0.0,
     playback_mode: str = "local",
@@ -2711,10 +2721,10 @@ def build_player_html(
     lookup_api_base: str = "",
     subtitle_offset: float = 0.0,
 ) -> str:
-    favorites = favorites or []
+    notes = notes or []
     wordbook = wordbook or []
     subtitle_json = json.dumps(subtitles, ensure_ascii=False).replace("</", "<\\/")
-    favorites_json = json.dumps(favorites, ensure_ascii=False).replace("</", "<\\/")
+    notes_json = json.dumps(notes, ensure_ascii=False).replace("</", "<\\/")
     wordbook_json = json.dumps(wordbook, ensure_ascii=False).replace("</", "<\\/")
     ai_lookup_json = json.dumps(ai_lookup or {}, ensure_ascii=False).replace("</", "<\\/")
     is_online = playback_mode == "online" and bool(external_video_id)
@@ -2740,7 +2750,7 @@ def build_player_html(
         .replace("__LOOKUP_API_BASE__", lookup_api_base.rstrip("/"))
         .replace("__INITIAL_SUBTITLE_OFFSET__", str(safe_subtitle_offset))
         .replace("__SUBTITLE_JSON__", subtitle_json)
-        .replace("__FAVORITES_JSON__", favorites_json)
+        .replace("__NOTES_JSON__", notes_json)
         .replace("__WORDBOOK_JSON__", wordbook_json)
         .replace("__AI_LOOKUP_JSON__", ai_lookup_json)
         .replace("__PROJECT_ID__", project_id or "")
@@ -2757,7 +2767,11 @@ def build_player_html(
         .replace("__PANEL_RESIZE_HINT__", t("player.panel_resize_hint", lang))
         .replace("__PANEL_RESIZE_VALUE__", t("player.panel_resize_value", lang))
         .replace("__TAB_SUBS__", t("player.tab_subtitles", lang))
-        .replace("__TAB_FAVS__", t("player.tab_favorites", lang))
+        .replace("__TAB_NOTES__", t("notes.title", lang))
+        .replace("__NOTE_CAPTURE__", t("notes.capture", lang))
+        .replace("__NOTE_FROM_SUBTITLE__", t("notes.from_subtitle", lang))
+        .replace("__NOTE_EMPTY__", t("notes.project_empty", lang))
+        .replace("__UNTITLED_NOTE__", t("notes.untitled", lang))
         .replace("__TAB_WORDS__", t("player.tab_wordbook", lang))
         .replace("__POPUP_PLACEHOLDER__", t("player.popup_translation_placeholder", lang))
         .replace("__POPUP_SAVE__", t("player.popup_save", lang))
@@ -2805,8 +2819,6 @@ def build_player_html(
         .replace("__HOVER_NO_RESULT__", t("player.hover_no_result", lang))
         .replace("__HOVER_AI_HINT__", t("player.hover_ai_hint", lang))
         .replace("__ACTION_TIMEOUT__", t("player.action_timeout", lang))
-        .replace("__POPUP_FAVORITE__", t("player.popup_favorite", lang))
-        .replace("__POPUP_UNFAVORITE__", t("player.popup_unfavorite", lang))
         .replace("__WORD_SAVE__", t("player.word_save", lang))
         .replace("__WORD_REMOVE__", t("player.word_remove", lang))
         .replace("__PLAY_PRONUNCIATION__", t("player.play_pronunciation", lang))
@@ -2819,7 +2831,6 @@ def build_player_html(
         .replace("__AI_TRANSLATE__", t("player.ai_translate", lang))
         .replace("__FREE_TRANSLATION_LABEL__", t("player.free_translation_label", lang))
         .replace("__FREE_TRANSLATION_FAILED__", t("player.free_translation_failed", lang))
-        .replace("__FAV_EMPTY__", t("player.fav_empty", lang))
         .replace("__WORD_EMPTY__", t("player.word_empty", lang))
         .replace("__PLAYER_INIT_FAILED__", t("player.init_failed", lang))
     )
@@ -3239,11 +3250,12 @@ def _handle_player_actions():
     """Process actions sent from the player iframe via URL query params.
 
     Actions:
+        open_note        — pause/capture context and open the project note composer
         lookup_word_ai   — translate a word in context via LLM, show in the popup
         translate_word   — legacy wordbook-save action
         delete_word       — remove word by id
-        toggle_favorite   — add/remove favorite by subtitle_id + project_id
-        delete_favorite   — remove favorite by id
+        toggle_favorite   — legacy sentence-favorite compatibility action
+        delete_favorite   — legacy sentence-favorite compatibility action
         seek              — set seek_to for next player render
     """
     qp = st.query_params
@@ -3258,7 +3270,7 @@ def _handle_player_actions():
     action = _param("action")
     if not action:
         return
-    valid_actions = {"lookup_word_ai", "translate_word", "delete_word", "toggle_favorite", "delete_favorite", "seek"}
+    valid_actions = {"open_note", "lookup_word_ai", "translate_word", "delete_word", "toggle_favorite", "delete_favorite", "seek"}
 
     # Consume the URL action before model or disk work so a failure/rerun cannot
     # replay the same write.
@@ -3283,7 +3295,26 @@ def _handle_player_actions():
         if action_subtitles:
             st.session_state.subtitles = action_subtitles
 
-    if action in {"lookup_word_ai", "translate_word"}:
+    if action == "open_note":
+        try:
+            time_val = max(0.0, float(_param("time", "0")))
+        except ValueError:
+            time_val = 0.0
+        st.session_state.seek_to = time_val
+        st.session_state.show_note_composer = True
+        st.session_state.note_draft = {
+            "project_id": action_project_id,
+            "time": time_val,
+            "subtitle_id": _param("subtitle_id"),
+            "source_text": _param("text").strip()[:4000],
+            "source_translation": _param("translation").strip()[:4000],
+        }
+        st.session_state.note_result = None
+        st.session_state.note_job_id = None
+        st.session_state.note_job_error = None
+        st.session_state.note_composer_nonce += 1
+
+    elif action in {"lookup_word_ai", "translate_word"}:
         word = _param("word").strip()[:160]
         context = _param("context").strip()[:2000]
         project_id = _param("project_id")
@@ -3739,6 +3770,9 @@ def _render_project_list(lang):
     # them mid-import would let the background worker recreate partial data.
     tasks = _active_tasks_for_app()
     running = [tsk for tsk in tasks.values() if not tsk["completed"]]
+    note_agent.configure(WORK_DIR)
+    note_running = note_agent.has_running_tasks()
+    delete_busy = bool(running) or note_running
     title_col, clear_col = st.columns([5, 1], vertical_alignment="center")
     with title_col:
         st.subheader(t("projects.header", lang))
@@ -3746,7 +3780,7 @@ def _render_project_list(lang):
         with st.popover("🗑️", help=t("projects.delete_all", lang), width="stretch"):
             st.warning(t("projects.delete_all_confirm", lang))
             st.caption(t("projects.delete_all_note", lang))
-            if running:
+            if delete_busy:
                 st.info(t("projects.delete_all_busy", lang))
             acknowledged = st.checkbox(
                 t("projects.delete_all_ack", lang), key="delete_all_acknowledged",
@@ -3754,7 +3788,7 @@ def _render_project_list(lang):
             if st.button(
                 t("projects.delete_all", lang), key="delete_all_learning_data",
                 type="primary", width="stretch",
-                disabled=bool(running) or not acknowledged,
+                disabled=delete_busy or not acknowledged,
             ):
                 result = _clear_all_learning_data()
                 st.toast(t("projects.delete_all_done", lang, n=result["projects"]), icon="🗑️")
@@ -4251,6 +4285,13 @@ def _render_project_action_bar(
     subtitles: Optional[list[dict]] = None,
 ) -> None:
     """Compact watch-page actions shown below the player, like media-site chips."""
+    note_agent.configure(WORK_DIR)
+    active_note_id = st.session_state.get("note_job_id")
+    active_note = note_agent.get(active_note_id) if active_note_id else None
+    note_busy = bool(
+        active_note and not active_note.get("completed")
+        and str(active_note.get("project_id") or "") == str(pid)
+    )
     action_columns = st.columns([1.1, 1.25, 4.8], vertical_alignment="center")
     with action_columns[0]:
         if subtitles:
@@ -4301,19 +4342,223 @@ def _render_project_action_bar(
             st.divider()
             st.warning(t("projects.delete_confirm", lang))
             st.caption(t("projects.delete_note", lang))
+            if note_busy:
+                st.info(t("projects.delete_all_busy", lang))
             if st.button(
                 t("projects.delete", lang), key=f"del_{pid}",
-                type="primary", width="stretch",
+                type="primary", width="stretch", disabled=note_busy,
             ):
+                if active_note_id:
+                    note_agent.discard(active_note_id)
                 delete_project(pid)
                 wordbook_store.remove_if(project_id=pid)
                 favorites_store.remove_if(project_id=pid)
+                notes_store.remove_if(project_id=pid)
                 st.session_state.projects = load_projects()
                 st.session_state.selected_project_id = None
                 st.session_state.current_project = None
                 st.session_state.processed = False
                 st.session_state.subtitles = None
+                _close_note_composer()
                 st.rerun()
+
+
+def _close_note_composer() -> None:
+    st.session_state.show_note_composer = False
+    st.session_state.note_draft = None
+    st.session_state.note_result = None
+    st.session_state.note_job_id = None
+    st.session_state.note_job_error = None
+    st.session_state.note_composer_nonce += 1
+
+
+def _note_entry(
+    project: dict, draft: dict, *, title: str, body: str,
+    raw_idea: str = "", summary: str = "", tags: list[str] | None = None,
+    key_points: list[str] | None = None,
+    vocabulary: list[dict] | None = None,
+    refined_by: str = "manual",
+) -> dict:
+    return {
+        "project_id": project.get("id", ""),
+        "project_title": project.get("custom_title") or project.get("title") or "",
+        "time": max(0.0, float(draft.get("time", 0.0) or 0.0)),
+        "subtitle_id": str(draft.get("subtitle_id") or ""),
+        "source_text": str(draft.get("source_text") or "").strip(),
+        "source_translation": str(draft.get("source_translation") or "").strip(),
+        "title": title.strip() or t("notes.untitled", lang),
+        "body": body.strip(),
+        "raw_idea": raw_idea.strip(),
+        "summary": summary.strip(),
+        "tags": tags or [],
+        "key_points": key_points or [],
+        "vocabulary": vocabulary or [],
+        "refined_by": refined_by,
+        "updated_at": datetime.now().astimezone().isoformat(),
+    }
+
+
+@st.fragment(run_every=1)
+def _poll_note_job_fragment(task_id: str) -> None:
+    note_agent.configure(WORK_DIR)
+    task = note_agent.get(task_id)
+    if not task:
+        st.session_state.note_job_id = None
+        st.session_state.note_job_error = t("notes.job_missing", lang)
+        st.rerun(scope="app")
+    if not task.get("completed"):
+        stage = task.get("stage", "queued")
+        st.info(t(f"notes.stage_{stage}", lang))
+        st.progress(0.35 if stage == "transcribing" else 0.72 if stage == "refining" else 0.08)
+        return
+    st.session_state.note_job_id = None
+    if task.get("error"):
+        st.session_state.note_job_error = task["error"]
+    else:
+        result = dict(task.get("result") or {})
+        result["raw_text"] = task.get("raw_text") or ""
+        st.session_state.note_result = result
+        st.session_state.note_job_error = None
+    note_agent.discard(task_id)
+    st.rerun(scope="app")
+
+
+def _render_note_composer(project: dict, lang: str) -> None:
+    if not st.session_state.get("show_note_composer"):
+        return
+    draft = st.session_state.get("note_draft") or {
+        "project_id": project.get("id"), "time": 0.0,
+        "source_text": "", "source_translation": "", "subtitle_id": "",
+    }
+    # A note remains tied to the video where it was captured.  Switching
+    # projects hides (rather than misattributes) the in-progress draft.
+    if str(draft.get("project_id") or "") != str(project.get("id") or ""):
+        return
+    nonce = int(st.session_state.get("note_composer_nonce", 0))
+    with st.container(border=True, key="learning_note_composer"):
+        st.subheader(t("notes.composer_title", lang))
+        st.caption(t("notes.composer_hint", lang))
+        source_text = str(draft.get("source_text") or "").strip()
+        source_translation = str(draft.get("source_translation") or "").strip()
+        if source_text:
+            st.markdown(f"> {source_text}")
+        if source_translation:
+            st.caption(source_translation)
+
+        job_id = st.session_state.get("note_job_id")
+        if job_id:
+            _poll_note_job_fragment(job_id)
+            return
+
+        job_error = st.session_state.get("note_job_error")
+        if job_error:
+            st.error(t("notes.job_failed", lang, error=job_error))
+
+        result = st.session_state.get("note_result")
+        if result:
+            warning = str(result.get("warning") or "")
+            if warning:
+                st.warning(t("notes.draft_warning", lang))
+            with st.form(f"note_result_form_{nonce}"):
+                title = st.text_input(
+                    t("notes.note_title", lang), value=str(result.get("title") or "")[:120],
+                )
+                body = st.text_area(
+                    t("notes.note_body", lang), value=str(result.get("body") or ""), height=180,
+                )
+                tags_text = st.text_input(
+                    t("notes.tags", lang), value=", ".join(result.get("tags") or []),
+                )
+                save_col, retry_col, cancel_col = st.columns([1.4, 1, 1])
+                save = save_col.form_submit_button(
+                    t("notes.save", lang), type="primary", width="stretch",
+                )
+                retry = retry_col.form_submit_button(t("notes.retry", lang), width="stretch")
+                cancel = cancel_col.form_submit_button(t("notes.cancel", lang), width="stretch")
+            if save:
+                if not body.strip():
+                    st.error(t("notes.body_required", lang))
+                else:
+                    tags = [item.strip() for item in re.split(r"[,，]", tags_text) if item.strip()]
+                    notes_store.add(_note_entry(
+                        project, draft, title=title, body=body,
+                        raw_idea=str(result.get("raw_text") or ""),
+                        summary=str(result.get("summary") or ""),
+                        tags=tags,
+                        key_points=list(result.get("key_points") or []),
+                        vocabulary=list(result.get("vocabulary") or []),
+                        refined_by=str(result.get("refined_by") or "draft"),
+                    ))
+                    _close_note_composer()
+                    st.toast(t("notes.saved", lang), icon="📝")
+                    st.rerun()
+            if retry:
+                st.session_state.note_result = None
+                st.session_state.note_job_error = None
+                st.rerun()
+            if cancel:
+                _close_note_composer()
+                st.rerun()
+            return
+
+        audio = st.audio_input(
+            t("notes.record", lang), sample_rate=16000,
+            key=f"note_audio_{nonce}", help=t("notes.record_help", lang),
+        )
+        raw_text = st.text_area(
+            t("notes.raw_idea", lang),
+            key=f"note_raw_{nonce}",
+            placeholder=t("notes.raw_placeholder", lang), height=120,
+        ) or ""
+        process_col, direct_col, cancel_col = st.columns([1.5, 1.15, 1])
+        process = process_col.button(
+            t("notes.refine", lang), type="primary", width="stretch",
+            disabled=audio is None and not raw_text.strip(), key=f"note_refine_{nonce}",
+        )
+        direct = direct_col.button(
+            t("notes.save_direct", lang), width="stretch",
+            disabled=not raw_text.strip(), key=f"note_direct_{nonce}",
+        )
+        cancel = cancel_col.button(t("notes.cancel", lang), width="stretch", key=f"note_cancel_{nonce}")
+
+        if process:
+            audio_path = ""
+            if audio is not None:
+                content = audio.getvalue()
+                if len(content) > 20 * 1024 * 1024:
+                    st.error(t("notes.audio_too_large", lang))
+                    return
+                audio_path = note_agent.save_audio(content, WORK_DIR, project["id"])
+            preset = _active_preset() or {}
+            model = st.session_state.model_override or preset.get("model_name") or ""
+            note_agent.configure(WORK_DIR)
+            st.session_state.note_job_id = note_agent.start({
+                "project_id": project["id"],
+                "audio_path": audio_path,
+                "raw_text": raw_text,
+                "context": draft,
+                "asr_model": st.session_state.asr_model,
+                "engine": preset.get("engine_type") or "",
+                "model": model,
+                "api_base": preset.get("api_base") or "",
+                "api_key": _effective_preset_api_key(preset) if preset else "",
+                "max_tokens": min(int(preset.get("max_tokens") or 1400), 3000),
+                "ui_language": lang,
+            })
+            st.session_state.note_job_error = None
+            st.rerun()
+        if direct:
+            compact = " ".join(raw_text.split())
+            notes_store.add(_note_entry(
+                project, draft, title=compact[:36], body=raw_text,
+                raw_idea=raw_text, summary=compact[:160], refined_by="manual",
+            ))
+            _close_note_composer()
+            st.toast(t("notes.saved", lang), icon="📝")
+            st.rerun()
+        if cancel:
+            _close_note_composer()
+            st.rerun()
 
 
 def _render_project_detail(lang, presets):
@@ -4412,7 +4657,7 @@ def _render_project_detail(lang, presets):
     player_html = build_player_html(
         video_url, subtitles, lang,
         project_id=pid,
-        favorites=favorites_store.load(),
+        notes=notes_store.load(),
         wordbook=wordbook_store.load(),
         initial_seek=st.session_state.get("seek_to", 0.0),
         playback_mode=proj.get("playback_mode", "local"),
@@ -4426,6 +4671,7 @@ def _render_project_detail(lang, presets):
         st.session_state.pending_ai_lookup = None
     st.session_state.seek_to = 0.0
     st.iframe(player_html, width="stretch", height=680)
+    _render_note_composer(proj, lang)
 
     st.markdown(
         f'<div class="watch-title">{html_lib.escape(f"{flag} {title}".strip())}</div>',
@@ -4461,22 +4707,77 @@ def _render_project_detail(lang, presets):
 
 
 # ===========================================================================
-# Collections page (global wordbook + favorites)
+# Notes page (AI/manual learning notes + wordbook)
 # ===========================================================================
 
-def collections_page():
-    """Global collections page: all words and favorites across projects."""
+def notes_page():
+    """Global learning notes, with the existing wordbook kept as reference."""
     _apply_product_theme()
     _install_sidebar_toggle(lang)
     projects_list = load_projects()
     proj_map = {p["id"]: p for p in projects_list}
 
-    st.title(t("collections.title", lang))
+    st.title(t("notes.title", lang))
+    st.caption(t("notes.page_hint", lang))
 
-    tab_word, tab_fav = st.tabs([
+    tab_notes, tab_word = st.tabs([
+        f"📝 {t('notes.all_notes', lang)}",
         f"📖 {t('collections.wordbook', lang)}",
-        f"⭐ {t('collections.favorites', lang)}",
     ])
+
+    with tab_notes:
+        with st.expander(f"＋ {t('notes.new_manual', lang)}"):
+            project_options = [""] + [project["id"] for project in projects_list]
+            project_names = {
+                "": t("notes.no_project", lang),
+                **{
+                    project["id"]: project.get("custom_title") or project.get("title") or project["id"]
+                    for project in projects_list
+                },
+            }
+            with st.form("manual_note_form", clear_on_submit=True):
+                selected_project = st.selectbox(
+                    t("notes.related_project", lang), project_options,
+                    format_func=lambda value: project_names.get(value, value),
+                )
+                manual_title = st.text_input(t("notes.note_title", lang))
+                manual_body = st.text_area(t("notes.note_body", lang), height=160)
+                manual_tags = st.text_input(t("notes.tags", lang))
+                manual_save = st.form_submit_button(
+                    t("notes.save", lang), type="primary", width="stretch",
+                )
+            if manual_save:
+                if not manual_body.strip():
+                    st.error(t("notes.body_required", lang))
+                else:
+                    related = proj_map.get(selected_project) or {
+                        "id": "", "title": t("notes.no_project", lang),
+                    }
+                    tags = [item.strip() for item in re.split(r"[,，]", manual_tags) if item.strip()]
+                    notes_store.add(_note_entry(
+                        related, {"time": 0}, title=manual_title,
+                        body=manual_body, raw_idea=manual_body,
+                        summary=" ".join(manual_body.split())[:160], tags=tags,
+                    ))
+                    st.toast(t("notes.saved", lang), icon="📝")
+                    st.rerun()
+
+        search_n = st.text_input(
+            t("collections.search", lang), key="notes_search",
+            label_visibility="collapsed", placeholder=f"🔍 {t('notes.search', lang)}",
+        ).strip().lower()
+        note_items = [
+            item for item in reversed(notes_store.load())
+            if not search_n or search_n in " ".join([
+                str(item.get("title") or ""), str(item.get("body") or ""),
+                str(item.get("source_text") or ""), " ".join(item.get("tags") or []),
+            ]).lower()
+        ]
+        st.caption(t("collections.count", lang, n=len(note_items)))
+        if not note_items:
+            st.info(t("notes.empty", lang))
+        for note in note_items:
+            _render_note_entry(note, proj_map, lang)
 
     with tab_word:
         words = wordbook_store.load()
@@ -4506,32 +4807,57 @@ def collections_page():
                 proj_title = (proj.get("custom_title") or proj.get("title", "?")) if proj else "?"
                 _render_word_entry(entry, proj_title, lang)
 
-    with tab_fav:
-        favs = favorites_store.load()
-        if not favs:
-            st.caption(t("collections.fav_empty", lang))
-        else:
-            search_f = st.text_input(
-                t("collections.search", lang),
-                key="fav_search",
-                label_visibility="collapsed",
-                placeholder=f"🔍 {t('collections.search_favorites', lang)}",
-            ).strip().lower()
-
-            filtered_f = [
-                f for f in reversed(favs)
-                if not search_f
-                or search_f in (f.get("text", "")).lower()
-                or search_f in (f.get("translation", "")).lower()
-            ]
-
-            st.caption(t("collections.count", lang, n=len(filtered_f)))
-
-            for fav in filtered_f:
-                pid = fav.get("project_id", "")
-                proj = proj_map.get(pid)
-                proj_title = (proj.get("custom_title") or proj.get("title", "?")) if proj else "?"
-                _render_fav_entry(fav, proj_title, lang)
+def _render_note_entry(note: dict, proj_map: dict[str, dict], lang: str) -> None:
+    project = proj_map.get(note.get("project_id", ""))
+    if project:
+        project_title = project.get("custom_title") or project.get("title") or project["id"]
+    else:
+        project_title = note.get("project_title") or t("notes.no_project", lang)
+    with st.container(border=True, key=f"note_card_{note['id']}"):
+        title_col, _ = st.columns([6, 1.2], vertical_alignment="center")
+        title_col.subheader(note.get("title") or t("notes.untitled", lang))
+        created = str(note.get("created_at") or "")[:10]
+        seconds = int(float(note.get("time", 0) or 0))
+        title_col.caption(f"{project_title} · {seconds // 60}:{seconds % 60:02d} · {created}")
+        tags = [str(item) for item in note.get("tags", []) if str(item).strip()]
+        if tags:
+            st.caption(" · ".join(f"#{item}" for item in tags))
+        if note.get("source_text"):
+            st.markdown(f"> {note['source_text']}")
+            if note.get("source_translation"):
+                st.caption(note["source_translation"])
+        st.markdown(note.get("body") or "")
+        open_col, edit_col, delete_col, _ = st.columns([1.2, 1, 1, 4])
+        if project and open_col.button(
+            t("collections.open", lang), key=f"note_open_{note['id']}", width="stretch",
+        ):
+            _open_project_with_seek(project["id"], float(note.get("time", 0) or 0))
+        with edit_col.popover(t("notes.edit", lang), width="stretch"):
+            edited_title = st.text_input(
+                t("notes.note_title", lang), value=note.get("title") or "",
+                key=f"note_title_{note['id']}",
+            )
+            edited_body = st.text_area(
+                t("notes.note_body", lang), value=note.get("body") or "", height=180,
+                key=f"note_body_{note['id']}",
+            )
+            edited_tags = st.text_input(
+                t("notes.tags", lang), value=", ".join(tags), key=f"note_tags_{note['id']}",
+            )
+            if st.button(t("notes.save_changes", lang), key=f"note_update_{note['id']}", width="stretch"):
+                if edited_body.strip():
+                    notes_store.update(
+                        note["id"], title=edited_title.strip() or t("notes.untitled", lang),
+                        body=edited_body.strip(),
+                        tags=[item.strip() for item in re.split(r"[,，]", edited_tags) if item.strip()],
+                        updated_at=datetime.now().astimezone().isoformat(),
+                    )
+                    st.rerun()
+                else:
+                    st.error(t("notes.body_required", lang))
+        if delete_col.button(t("notes.delete", lang), key=f"note_delete_{note['id']}", width="stretch"):
+            notes_store.remove(note["id"])
+            st.rerun()
 
 
 def _open_project_with_seek(project_id: str, seek_time: float):
@@ -4604,39 +4930,12 @@ def _render_word_entry(entry: dict, proj_title: str, lang: str):
                 _open_project_with_seek(entry.get("project_id", ""), entry.get("time", 0))
 
 
-def _render_fav_entry(fav: dict, proj_title: str, lang: str):
-    """Render a favorite entry card."""
-    with st.container(border=True):
-        c_text, c_proj, c_del = st.columns([5, 2, 1])
-        with c_text:
-            st.write(fav.get("text", ""))
-            if fav.get("translation"):
-                st.caption(fav["translation"])
-        with c_proj:
-            mins = int(fav.get("time", 0)) // 60
-            secs = int(fav.get("time", 0)) % 60
-            st.caption(f"🕒 {mins}:{secs:02d} | 🎬 {proj_title[:15]}")
-        with c_del:
-            if st.button("🗑️", key=f"cf_{fav['id']}", help=t("projects.delete", lang)):
-                favorites_store.remove(fav["id"])
-                st.rerun()
-
-        c_open, _ = st.columns([1, 4])
-        with c_open:
-            if st.button(
-                f"▶ {t('collections.open', lang)}",
-                key=f"fo_{fav['id']}",
-                width="stretch",
-            ):
-                _open_project_with_seek(fav.get("project_id", ""), fav.get("time", 0))
-
-
 # ===========================================================================
 # Navigation
 # ===========================================================================
 
 _home_pg = st.Page(home_page, title=t("app.title", lang), icon="🏠")
 _settings_pg = st.Page(settings_page, title=t("sidebar.header", lang), icon="⚙️")
-_collections_pg = st.Page(collections_page, title=t("collections.title", lang), icon="📚")
-pg = st.navigation([_home_pg, _settings_pg, _collections_pg])
+_notes_pg = st.Page(notes_page, title=t("notes.title", lang), icon="📝")
+pg = st.navigation([_home_pg, _settings_pg, _notes_pg])
 pg.run()
