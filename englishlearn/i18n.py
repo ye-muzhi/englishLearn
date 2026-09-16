@@ -262,6 +262,26 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Speaker",
         "zh": "说话人",
     },
+    "results.speaker_number": {
+        "en": "Speaker {number}",
+        "zh": "说话人{number}",
+    },
+    "results.transcript_time": {
+        "en": "Time",
+        "zh": "时间",
+    },
+    "results.transcript_speaker": {
+        "en": "Speaker",
+        "zh": "说话人",
+    },
+    "results.transcript_source": {
+        "en": "Original",
+        "zh": "原文",
+    },
+    "results.transcript_target": {
+        "en": "Translation",
+        "zh": "译文",
+    },
     "results.no_results": {
         "en": "No results to display. Try processing a new video.",
         "zh": "暂无结果。请尝试处理一个新的视频。",

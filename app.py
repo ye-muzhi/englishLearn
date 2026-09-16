@@ -252,8 +252,15 @@ def _apply_product_theme() -> None:
         .watch-title { font-size:1.28rem; line-height:1.35; font-weight:750; letter-spacing:-.02em; margin:.75rem 0 .15rem; }
         .watch-meta { color:var(--muted); font-size:.82rem; margin-bottom:.35rem; }
         .transcript-sheet { display:flex; flex-direction:column; gap:.45rem; padding:.2rem 0 .35rem; }
+        .transcript-head, .transcript-row {
+            display:grid; grid-template-columns:88px 84px minmax(0,1fr) minmax(0,1fr);
+            gap:1rem; align-items:start;
+        }
+        .transcript-head {
+            padding:.25rem 1.1rem .4rem; color:#888; font-size:.72rem;
+            font-weight:750; letter-spacing:.04em;
+        }
         .transcript-row {
-            display:grid; grid-template-columns:88px minmax(0,1fr); gap:1rem;
             padding:1rem 1.1rem; border-radius:12px; background:#202020;
             border:1px solid transparent; transition:background .15s ease, border-color .15s ease;
         }
@@ -262,10 +269,14 @@ def _apply_product_theme() -> None:
             color:#aaa; font:650 .75rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
             font-variant-numeric:tabular-nums; padding-top:.15rem; white-space:nowrap;
         }
-        .transcript-copy { min-width:0; }
+        .transcript-speaker {
+            display:inline-flex; width:max-content; max-width:100%; align-items:center;
+            min-height:24px; padding:.15rem .5rem; border-radius:999px;
+            color:#ddd; background:#303030; font-size:.75rem; font-weight:750;
+            white-space:nowrap;
+        }
         .transcript-source { color:#f1f1f1; font-size:1rem; line-height:1.65; overflow-wrap:anywhere; }
-        .transcript-target { color:#c9c2ff; font-size:.94rem; line-height:1.65; margin-top:.38rem; overflow-wrap:anywhere; }
-        .transcript-speaker { display:inline; color:#fff; font-weight:800; margin-right:.35rem; }
+        .transcript-target { color:#c9c2ff; font-size:.94rem; line-height:1.65; overflow-wrap:anywhere; }
         .transcript-empty { color:#777; }
         .form-shell { max-width: 980px; padding-top: 1.5rem; }
         @media (max-width: 768px) {
@@ -290,8 +301,12 @@ def _apply_product_theme() -> None:
             [class*="st-key-recent_gallery"] [data-testid="stColumn"] {
                 flex:1 1 220px !important; min-width:220px !important;
             }
-            .transcript-row { grid-template-columns:1fr; gap:.35rem; padding:.85rem; }
+            .transcript-head { display:none; }
+            .transcript-row {
+                grid-template-columns:88px minmax(0,1fr); gap:.45rem .75rem; padding:.85rem;
+            }
             .transcript-time { padding:0; }
+            .transcript-source, .transcript-target { grid-column:1 / -1; }
         }
         </style>
         """,
@@ -3415,8 +3430,12 @@ def _format_project_created_at(value: str) -> str:
 
 
 _SPEAKER_PREFIX = re.compile(
-    r"^([A-Za-z][A-Za-z0-9 ._'’-]{0,31}|[\u3400-\u9fff][\u3400-\u9fff·・]{0,11})\s*[:：]\s*(.+)$",
+    r"^([A-Za-z\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff ._'’·・-]{0,31})\s*[:：]\s*(.+)$",
     re.DOTALL,
+)
+_INLINE_SPEAKER_PREFIX = re.compile(
+    r"(?:^|(?<=[.!?。！？]\s))"
+    r"([A-Za-z\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff ._'’·・-]{0,31})\s*[:：]"
 )
 
 
@@ -3438,9 +3457,11 @@ def _transcript_parts(
     return speaker, text
 
 
-def _render_transcript_sheet(subtitles: list[dict], lang: str) -> None:
-    """Render subtitle data as a flat, reading-first transcript."""
+def _transcript_sheet_html(subtitles: list[dict], lang: str) -> str:
+    """Build a stable time/speaker/source/target transcript grid."""
     unknown_speaker = t("results.speaker_unknown", lang)
+    speaker_numbers: dict[str, int] = {}
+    current_speaker = ""
     rows: list[str] = []
     for subtitle in subtitles:
         source_speaker, source_text = _transcript_parts(
@@ -3452,27 +3473,63 @@ def _render_transcript_sheet(subtitles: list[dict], lang: str) -> None:
         if target_speaker == unknown_speaker and source_speaker:
             target_speaker = source_speaker
 
-        def line_html(speaker: str, text: str, css_class: str) -> str:
-            if not text:
-                return f'<div class="{css_class} transcript-empty">—</div>'
-            prefix = (
-                f'<span class="transcript-speaker">{html_lib.escape(speaker)}:</span>'
-                if speaker else ""
-            )
-            return f'<div class="{css_class}">{prefix}{html_lib.escape(text)}</div>'
+        explicit_speaker = source_speaker
+        if explicit_speaker == unknown_speaker:
+            explicit_speaker = ""
+        if not explicit_speaker and not source_text:
+            explicit_speaker = target_speaker
+            if explicit_speaker == unknown_speaker:
+                explicit_speaker = ""
+        if explicit_speaker:
+            current_speaker = explicit_speaker
+        elif not current_speaker:
+            current_speaker = "__unknown__"
+        if current_speaker not in speaker_numbers:
+            speaker_numbers[current_speaker] = len(speaker_numbers) + 1
+        speaker_label = t(
+            "results.speaker_number", lang,
+            number=speaker_numbers[current_speaker],
+        )
+
+        def text_html(text: str, css_class: str) -> str:
+            value = html_lib.escape(text) if text else "—"
+            empty = " transcript-empty" if not text else ""
+            return f'<div class="{css_class}{empty}">{value}</div>'
 
         start = float(subtitle.get("start", 0.0) or 0.0)
         end = max(start, float(subtitle.get("end", start) or start))
         rows.append(
             '<article class="transcript-row">'
             f'<div class="transcript-time">{start:.1f}s – {end:.1f}s</div>'
-            '<div class="transcript-copy">'
-            f'{line_html(source_speaker, source_text, "transcript-source")}'
-            f'{line_html(target_speaker, target_text, "transcript-target")}'
-            '</div></article>'
+            f'<div class="transcript-speaker">{html_lib.escape(speaker_label)}</div>'
+            f'{text_html(source_text, "transcript-source")}'
+            f'{text_html(target_text, "transcript-target")}'
+            '</article>'
         )
+
+        # A cue can finish with the next speaker (for example, "... Sarah:").
+        # Carry that identity into the following row without changing this
+        # row's leading speaker label.
+        raw_source = str(subtitle.get("text") or "").replace("\xa0", " ")
+        mentioned_speakers = _INLINE_SPEAKER_PREFIX.findall(raw_source)
+        if mentioned_speakers:
+            current_speaker = mentioned_speakers[-1].strip()
+
+    header = (
+        '<div class="transcript-head" aria-hidden="true">'
+        f'<span>{html_lib.escape(t("results.transcript_time", lang))}</span>'
+        f'<span>{html_lib.escape(t("results.transcript_speaker", lang))}</span>'
+        f'<span>{html_lib.escape(t("results.transcript_source", lang))}</span>'
+        f'<span>{html_lib.escape(t("results.transcript_target", lang))}</span>'
+        '</div>'
+    )
+    return '<div class="transcript-sheet">' + header + "".join(rows) + '</div>'
+
+
+def _render_transcript_sheet(subtitles: list[dict], lang: str) -> None:
+    """Render subtitle data as a reading-first bilingual transcript."""
     st.markdown(
-        '<div class="transcript-sheet">' + "".join(rows) + '</div>',
+        _transcript_sheet_html(subtitles, lang),
         unsafe_allow_html=True,
     )
 

@@ -128,6 +128,24 @@ def test_transcript_speaker_prefixes_are_flat_and_readable():
           speaker == "Mike" and text == "And I'm Mike.")
 
 
+def test_transcript_sheet_uses_separate_numbered_speaker_and_bilingual_columns():
+    import app
+
+    markup = app._transcript_sheet_html([
+        {"start": 0, "end": 1, "text": "Sarah: Hello!", "translation": "莎拉 anecdot：你好！"},
+        {"start": 1, "end": 2, "text": "Welcome back.", "translation": "欢迎回来。"},
+        {"start": 2, "end": 3, "text": "Mike: Hi Sarah.", "translation": "迈克：你好，莎拉。"},
+    ], "zh")
+    check("transcript has four-column headers",
+          all(label in markup for label in (">时间<", ">说话人<", ">原文<", ">译文<")))
+    check("speaker identities are anonymized and stable",
+          markup.count(">说话人1<") == 2 and markup.count(">说话人2<") == 1)
+    check("source and target have independent columns",
+          'class="transcript-source"' in markup and 'class="transcript-target"' in markup)
+    check("real speaker names are removed from displayed copy",
+          "Sarah:" not in markup and "Mike:" not in markup and "莎拉 anecdot：" not in markup)
+
+
 # ---------------------------------------------------------------------------
 # Test 2: navigation to Settings and back
 # ---------------------------------------------------------------------------
