@@ -12,8 +12,11 @@ INCLUDE_FILES = [
     ".python-version", ".gitignore", "AGENTS.md", "FEATURES.md", "README.md",
     "requirements.txt", "app.py", "EnglishLearn.command", "EnglishLearn-Windows.bat",
 ]
-INCLUDE_DIRS = [".streamlit", "docs", "englishlearn", "scripts"]
-EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".venv", ".tools", "work", "dist"}
+INCLUDE_DIRS = [".streamlit", ".github", "desktop", "docs", "englishlearn", "scripts"]
+EXCLUDED_PARTS = {
+    "__pycache__", ".pytest_cache", ".venv", ".tools", "work", "dist",
+    "node_modules", "target", "binaries",
+}
 
 
 def should_copy(path: Path) -> bool:
@@ -51,6 +54,6 @@ def build(version: str) -> Path:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default="1.1.0")
     args = parser.parse_args()
     print(build(args.version))

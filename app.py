@@ -221,31 +221,37 @@ def _apply_product_theme() -> None:
             position:absolute; right:9px; bottom:9px; background:rgba(0,0,0,.72); color:#fff;
             border-radius:5px; padding:.18rem .4rem; font-size:.68rem; font-weight:700;
         }
-        .gallery-cover-link { display:block; position:relative; border-radius:14px; outline-offset:3px; }
+        .gallery-cover { display:block; position:relative; border-radius:14px; }
         .gallery-cover-image {
             display:block;
             width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:14px;
             background:linear-gradient(135deg,#050505,#29263a);
         }
-        .gallery-cover-link::after {
+        .gallery-cover::after {
             content:"▶"; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) scale(.92);
             width:48px; height:34px; display:grid; place-items:center;
             border-radius:11px; background:rgba(15,15,15,.78); color:#fff;
             opacity:0; transition:opacity .16s ease, transform .16s ease;
         }
-        .gallery-cover-link:hover::after,
-        .gallery-cover-link:focus-visible::after { opacity:1; transform:translate(-50%,-50%) scale(1); }
-        [class*="st-key-recent_card_"] { position:relative; }
-        .gallery-title-link {
-            display:block; width:100%; min-height:40px; padding:.35rem 0;
-            color:var(--ink) !important; text-decoration:none !important;
-            text-align:left !important; font-weight:700; line-height:1.35;
+        [class*="st-key-cover_hit_"]:hover .gallery-cover::after,
+        [class*="st-key-cover_hit_"]:has(button:focus-visible) .gallery-cover::after {
+            opacity:1; transform:translate(-50%,-50%) scale(1);
         }
-        .gallery-title-link:hover { color:#fff !important; }
-        .gallery-title-link:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
-        .gallery-cover-link:focus-visible,
-        .library-thumbnail-link:focus-visible {
-            outline:3px solid var(--brand);
+        [class*="st-key-cover_hit_"] { position:relative; }
+        [class*="st-key-cover_hit_"] [data-testid="stButton"] {
+            position:absolute; inset:0; z-index:3;
+        }
+        [class*="st-key-cover_hit_"] [data-testid="stButton"] button {
+            width:100%; height:100%; min-height:0; padding:0; opacity:0; cursor:pointer;
+        }
+        [class*="st-key-cover_hit_"]:has(button:focus-visible) {
+            outline:3px solid var(--brand); outline-offset:3px; border-radius:14px;
+        }
+        [class*="st-key-recent_card_"] { position:relative; }
+        [class*="st-key-gallery_title_"] button {
+            justify-content:flex-start; min-height:40px; padding:.35rem 0;
+            border:0; background:transparent; color:var(--ink); font-weight:700;
+            line-height:1.35; text-align:left;
         }
         .gallery-mode-label {
             display:inline-flex; align-items:center; margin:-.1rem 0 .2rem;
@@ -3946,34 +3952,34 @@ def _render_welcome(lang):
                     if video_id:
                         thumbnail_source = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
                 with st.container(key=f"recent_card_{pid}"):
-                    open_url = "?" + urllib.parse.urlencode({"open_project": pid})
                     open_label = t("projects.open_project", lang, title=title)
-                    if thumbnail_source:
-                        if os.path.isfile(thumbnail_source):
-                            thumbnail_source = _local_thumbnail_data_uri(
-                                thumbnail_source, os.stat(thumbnail_source).st_mtime_ns,
+                    with st.container(key=f"cover_hit_{pid}"):
+                        if thumbnail_source:
+                            if os.path.isfile(thumbnail_source):
+                                thumbnail_source = _local_thumbnail_data_uri(
+                                    thumbnail_source, os.stat(thumbnail_source).st_mtime_ns,
+                                )
+                            st.markdown(
+                                '<div class="gallery-cover">'
+                                f'<img class="gallery-cover-image" src="{html_lib.escape(thumbnail_source)}" '
+                                f'alt="{html_lib.escape(title)}"></div>',
+                                unsafe_allow_html=True,
                             )
-                        st.markdown(
-                            f'<a class="gallery-cover-link" href="{html_lib.escape(open_url)}" '
-                            f'aria-label="{html_lib.escape(open_label)}" title="{html_lib.escape(open_label)}">'
-                            f'<img class="gallery-cover-image" src="{html_lib.escape(thumbnail_source)}" '
-                            f'alt="{html_lib.escape(title)}"></a>'
-                            f'<span class="gallery-mode-label">{html_lib.escape(mode_label)}</span>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.markdown(
-                            f'<a class="library-thumbnail-link" href="{html_lib.escape(open_url)}">'
-                            '<div class="library-thumbnail">'
-                            f'<span class="mode-badge">{html_lib.escape(mode_label)}</span>'
-                            '</div></a>',
-                            unsafe_allow_html=True,
-                        )
+                        else:
+                            st.markdown(
+                                '<div class="library-thumbnail"></div>',
+                                unsafe_allow_html=True,
+                            )
+                        if st.button(open_label, key=f"cover_button_{pid}", width="stretch"):
+                            _select_project(project, lang)
                     st.markdown(
-                        f'<a class="gallery-title-link" href="{html_lib.escape(open_url)}" '
-                        f'aria-label="{html_lib.escape(open_label)}">{html_lib.escape(title)}</a>',
+                        f'<span class="gallery-mode-label">{html_lib.escape(mode_label)}</span>',
                         unsafe_allow_html=True,
                     )
+                    if st.button(
+                        title, key=f"gallery_title_{pid}", type="tertiary", width="stretch",
+                    ):
+                        _select_project(project, lang)
                     created_at = _format_project_created_at(project.get("created_at", ""))
                     status_key = project.get("status", "legacy")
                     status_text = t(f"projects.status_{status_key}", lang)

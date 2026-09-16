@@ -1157,7 +1157,9 @@ def test_media_site_application_shell_contract():
     assert 'project.get("thumbnail_path")' in source
     assert "https://i.ytimg.com/vi/" in source
     assert 'class="gallery-cover-image"' in source
-    assert 'class="gallery-title-link"' in source
+    assert 'key=f"cover_button_{pid}"' in source
+    assert 'key=f"gallery_title_{pid}"' in source
+    assert '[class*="st-key-cover_hit_"] [data-testid="stButton"]' in source
     assert '_handle_project_open_query(lang)' in source
     assert '_select_project(project, lang, rerun=False)' in source
     assert 'if any(not task["completed"] or task_id not in _seen' in source

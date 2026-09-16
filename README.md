@@ -27,10 +27,31 @@ macOS 如果首次打开被系统拦截，请在 Finder 中右键 `EnglishLearn.
 生成不含个人数据、视频、字幕、词库、密钥、虚拟环境和模型的分享包：
 
 ```bash
-.venv/bin/python scripts/build_release.py --version 0.1.0
+.venv/bin/python scripts/build_release.py --version 1.1.0
 ```
 
-产物位于 `dist/EnglishLearn-0.1.0.zip`。Windows 的运行环境必须在 Windows 上首次安装，macOS 同理；不要跨系统复制已经生成的 `.venv/`。
+## 正式桌面安装包
+
+`desktop/` 包含 Tauri v2 桌面壳。它使用系统 WebView 展示本地
+EnglishLearn，不会启动或接管 Chrome。Python 后端由 PyInstaller 构建为
+平台 sidecar，应用关闭时会同步结束本地服务。
+
+本地构建需要 Rust、Node.js 22 和已经准备好的 `.venv`：
+
+```bash
+uv pip install --python .venv/bin/python pyinstaller
+.venv/bin/python scripts/build_desktop_sidecar.py
+cd desktop
+npm install
+npm run build
+```
+
+仓库同时提供 `.github/workflows/desktop-release.yml`，会在原生 macOS 与
+Windows 环境构建 DMG/安装包。正式对外发布前，应在 GitHub 仓库密钥中
+配置 Apple 公证、Windows 代码签名和 Tauri 更新签名所需凭据；未配置时
+生成的包只适合内部测试。
+
+源码分享包位于 `dist/EnglishLearn-1.1.0.zip`。Windows 的运行环境必须在 Windows 上首次安装，macOS 同理；不要跨系统复制已经生成的 `.venv/`。
 
 ## 项目结构
 

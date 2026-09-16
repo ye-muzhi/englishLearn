@@ -1,0 +1,54 @@
+name: Desktop release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.11" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: uv venv --python 3.11 .venv
+      - run: uv pip install --python .venv/bin/python -r requirements.txt pyinstaller
+        if: runner.os != 'Windows'
+      - run: uv pip install --python .venv/Scripts/python.exe -r requirements.txt pyinstaller
+        if: runner.os == 'Windows'
+      - run: .venv/bin/python scripts/build_desktop_sidecar.py
+        if: runner.os != 'Windows'
+      - run: .venv/Scripts/python.exe scripts/build_desktop_sidecar.py
+        if: runner.os == 'Windows'
+      - run: npm install
+        working-directory: desktop
+      - uses: tauri-apps/tauri-action@v0
+        if: github.ref_type != 'tag'
+        with:
+          projectPath: desktop
+      - uses: tauri-apps/tauri-action@v0
+        if: github.ref_type == 'tag'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "EnglishLearn ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
