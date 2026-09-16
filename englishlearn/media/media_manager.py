@@ -22,6 +22,7 @@ import ffmpeg
 import yt_dlp
 
 from ..paths import work_dir
+from .dictionary_index import ensure_csv_index, lookup_sqlite
 
 
 # Public dictionary/translation services are intentionally accessed from this
@@ -132,6 +133,7 @@ def _normalise_ecdict_row(row: dict) -> Optional[dict]:
         "definitions": definitions[:12],
         "pos": str(row.get("pos") or "").strip(),
         "source": "ECDICT",
+        "matched_form": str(row.get("matched_form") or row.get("word") or "").strip(),
     }
 
 
@@ -141,25 +143,13 @@ def _lookup_ecdict(word: str) -> Optional[dict]:
     for path in _ecdict_candidates():
         try:
             if path.lower().endswith(".db"):
-                connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.25)
-                connection.row_factory = sqlite3.Row
-                try:
-                    row = connection.execute(
-                        "SELECT word, phonetic, definition, translation, pos FROM stardict "
-                        "WHERE word = ? COLLATE NOCASE LIMIT 1",
-                        (word,),
-                    ).fetchone()
-                    return _normalise_ecdict_row(dict(row)) if row else None
-                finally:
-                    connection.close()
-            # The mini CSV is small enough for bounded on-demand scans. The
-            # multi-million-row full CSV should first be converted to SQLite.
-            if os.path.getsize(path) > 64 * 1024 * 1024:
-                continue
-            with open(path, encoding="utf-8", newline="") as source:
-                for row in csv.DictReader(source):
-                    if str(row.get("word") or "").strip().lower() == key:
-                        return _normalise_ecdict_row(row)
+                row = lookup_sqlite(path, word)
+                return _normalise_ecdict_row(row) if row else None
+            index_path = ensure_csv_index(
+                path, os.path.join(_dictionary_work_dir(), "dictionaries"),
+            )
+            row = lookup_sqlite(index_path, word) if index_path else None
+            return _normalise_ecdict_row(row) if row else None
         except (OSError, csv.Error, sqlite3.Error, UnicodeError):
             continue
     return None
@@ -189,6 +179,15 @@ def free_word_lookup(word: str, target: str = "zh-CN") -> dict:
     if cached is not None:
         return cached
     local_dictionary = _lookup_ecdict(source)
+    if local_dictionary:
+        local_translation = "；".join(local_dictionary.get("translations") or [])
+        result = {
+            "dictionary": None,
+            "translation": local_translation,
+            "local": local_dictionary,
+            "lookup_source": "local",
+        }
+        return _cache_put("word", key, target, result)
     dictionary_url = "https://api.dictionaryapi.dev/api/v2/entries/en/" + urllib.parse.quote(source)
     with ThreadPoolExecutor(max_workers=2) as executor:
         dictionary_task = executor.submit(_fetch_public_json, dictionary_url)
@@ -205,6 +204,7 @@ def free_word_lookup(word: str, target: str = "zh-CN") -> dict:
         "dictionary": dictionary if isinstance(dictionary, list) else None,
         "translation": translation,
         "local": local_dictionary,
+        "lookup_source": "public" if dictionary else ("translation" if translation else "none"),
     }
     return _cache_put("word", key, target, result) if result["dictionary"] or result["translation"] else result
 
