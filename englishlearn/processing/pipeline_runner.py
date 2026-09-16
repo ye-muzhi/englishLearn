@@ -25,8 +25,9 @@ from ..media.media_manager import (
 from ..storage.project_store import (
     load_projects, append_project, update_project,
     create_project, save_subtitles_to_project,
-    load_project_raw_subtitles, save_translated_subtitles,
+    load_project_raw_subtitles, save_subtitle_layers,
 )
+from .subtitle_contract import normalize_raw_cues, normalize_segmented_cues
 from .sentence_segmenter import sentence_segment, SUBTITLE_MIN_PAUSE, SUBTITLE_MAX_WORDS
 
 # session_token -> {task_id -> task_dict}
@@ -255,6 +256,11 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             subtitles_raw = engine.transcribe(audio_path)
             task["raw_count"] = len(subtitles_raw)
 
+        # Freeze the source layer before any segmentation changes cue
+        # boundaries. Every later cue keeps explicit lineage back to this set.
+        source_subtitles_raw = normalize_raw_cues(subtitles_raw)
+        subtitles_raw = source_subtitles_raw
+
         has_word_timing = any(
             isinstance(item.get("words"), list) and bool(item.get("words"))
             for item in subtitles_raw
@@ -299,6 +305,10 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
                     keep_word_timing=True,
                 )
 
+            subtitles_raw = normalize_segmented_cues(
+                subtitles_raw, source_subtitles_raw,
+            )
+
             task["step"] = 4
             task["stage"] = "translate"
             task["step_label"] = "Translating"
@@ -327,6 +337,10 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
                 )
 
             model_used = f"{params['engine_type']}:{params['model_name']}"
+        segmented_subtitles = normalize_segmented_cues(
+            subtitles if native_target_used else subtitles_raw,
+            source_subtitles_raw,
+        )
         if kind == "retranslate":
             projects_list = load_projects()
             proj = next((p for p in projects_list if p["id"] == params["project_id"]), None)
@@ -335,7 +349,9 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             proj["model_used"] = model_used
             proj["target_lang"] = params["target_lang_code"]
             proj["timing_source"] = "word" if has_word_timing else "cue"
-            save_translated_subtitles(proj, subtitles)
+            save_subtitle_layers(
+                proj, source_subtitles_raw, segmented_subtitles, subtitles,
+            )
             update_project(proj)
             result_pid = params["project_id"]
         elif kind == "reprocess":
@@ -352,7 +368,11 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             # not be applied again to a newly word-aligned timeline.
             proj["subtitle_offset"] = 0.0
             proj["timing_source"] = "word" if has_word_timing else "cue"
-            proj = save_subtitles_to_project(proj, subtitles)
+            proj = save_subtitles_to_project(
+                proj, subtitles,
+                raw_subtitles=source_subtitles_raw,
+                segmented_subtitles=segmented_subtitles,
+            )
             update_project(proj)
             result_pid = params["project_id"]
         else:
@@ -395,7 +415,11 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
                     or (Path(video_path).stem if video_path else params.get("display_title"))
                     or proj["title"]
                 )
-            proj = save_subtitles_to_project(proj, subtitles)
+            proj = save_subtitles_to_project(
+                proj, subtitles,
+                raw_subtitles=source_subtitles_raw,
+                segmented_subtitles=segmented_subtitles,
+            )
             update_project(proj)
             result_pid = proj["id"]
 

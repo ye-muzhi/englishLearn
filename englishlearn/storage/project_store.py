@@ -21,6 +21,13 @@ from pathlib import Path
 from typing import Optional
 
 from ..paths import work_dir
+from ..processing.subtitle_contract import (
+    SCHEMA_VERSION,
+    build_quality_report,
+    normalize_raw_cues,
+    normalize_segmented_cues,
+    normalize_translated_cues,
+)
 
 # Absolute path to the work/ directory
 WORK_DIR = str(work_dir())
@@ -284,7 +291,10 @@ def create_project(
         "thumbnail_path": None,
         "thumbnail_url": None,
         "subtitles_raw_path": None,
+        "subtitles_segmented_path": None,
         "subtitles_translated_path": None,
+        "subtitle_quality_path": None,
+        "subtitle_schema_version": SCHEMA_VERSION,
         "target_lang": target_lang,
         "model_used": model_used,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -294,36 +304,57 @@ def create_project(
     return project
 
 
-def save_subtitles_to_project(project: dict, subtitles: list[dict]) -> dict:
+def save_subtitle_layers(
+    project: dict,
+    raw_subtitles: list[dict],
+    segmented_subtitles: list[dict],
+    translated_subtitles: list[dict],
+) -> dict:
+    """Atomically persist the source, segmented, translated, and QA layers."""
+    pid = project["id"]
+    proj_dir = _project_dir(pid)
+    raw = normalize_raw_cues(raw_subtitles)
+    segmented = normalize_segmented_cues(segmented_subtitles, raw)
+    translated = normalize_translated_cues(translated_subtitles, segmented)
+    quality = build_quality_report(raw, segmented, translated)
+
+    raw_path = os.path.join(proj_dir, "subtitles_raw.json")
+    segmented_path = os.path.join(proj_dir, "subtitles_segmented.json")
+    trans_path = os.path.join(proj_dir, "subtitles_translated.json")
+    quality_path = os.path.join(proj_dir, "subtitle_quality.json")
+    _write_json(raw_path, raw)
+    _write_json(segmented_path, segmented)
+    _write_json(trans_path, translated)
+    _write_json(quality_path, quality)
+
+    project["subtitles_raw_path"] = raw_path
+    project["subtitles_segmented_path"] = segmented_path
+    project["subtitles_translated_path"] = trans_path
+    project["subtitle_quality_path"] = quality_path
+    project["subtitle_schema_version"] = SCHEMA_VERSION
+    project["subtitle_quality"] = {
+        "passed": quality["passed"],
+        "errors": quality["errors"],
+        "warnings": quality["warnings"],
+    }
+    project["status"] = "completed"
+    return project
+
+
+def save_subtitles_to_project(
+    project: dict,
+    subtitles: list[dict],
+    *,
+    raw_subtitles: Optional[list[dict]] = None,
+    segmented_subtitles: Optional[list[dict]] = None,
+) -> dict:
     """Write subtitles_raw.json and subtitles_translated.json
     into the project directory. Update project paths and status.
     Returns the updated project dict.
     """
-    pid = project["id"]
-    proj_dir = _project_dir(pid)
-
-    raw_path = os.path.join(proj_dir, "subtitles_raw.json")
-    raw_data = [
-        {
-            k: s[k]
-            for k in ("id", "start", "end", "text", "words")
-            if k in s
-        }
-        for s in subtitles
-    ]
-    _write_json(raw_path, raw_data)
-
-    trans_path = os.path.join(proj_dir, "subtitles_translated.json")
-    translated_data = [
-        {k: value for k, value in subtitle.items() if k not in {"words", "wc"}}
-        for subtitle in subtitles
-    ]
-    _write_json(trans_path, translated_data)
-
-    project["subtitles_raw_path"] = raw_path
-    project["subtitles_translated_path"] = trans_path
-    project["status"] = "completed"
-    return project
+    source = raw_subtitles if raw_subtitles is not None else subtitles
+    segmented = segmented_subtitles if segmented_subtitles is not None else subtitles
+    return save_subtitle_layers(project, source, segmented, subtitles)
 
 
 def load_project_subtitles(project_id: str) -> Optional[list[dict]]:
@@ -338,9 +369,18 @@ def load_project_subtitles(project_id: str) -> Optional[list[dict]]:
         return None
     try:
         with open(trans_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            translated = json.load(f)
     except json.JSONDecodeError:
         return None
+    if not isinstance(translated, list):
+        return None
+    segmented = load_project_segmented_subtitles(project_id)
+    if segmented is None:
+        return translated
+    normalized = normalize_translated_cues(translated, segmented)
+    if normalized != translated:
+        _write_json(trans_path, normalized)
+    return normalized
 
 
 def load_project_raw_subtitles(project_id: str) -> Optional[list[dict]]:
@@ -351,9 +391,61 @@ def load_project_raw_subtitles(project_id: str) -> Optional[list[dict]]:
         return None
     try:
         with open(raw_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            raw = json.load(f)
     except json.JSONDecodeError:
         return None
+    if not isinstance(raw, list):
+        return None
+    normalized = normalize_raw_cues(raw)
+    if normalized != raw:
+        _write_json(raw_path, normalized)
+    return normalized
+
+
+def load_project_segmented_subtitles(project_id: str) -> Optional[list[dict]]:
+    """Load the post-segmentation layer; lazily migrate legacy projects."""
+    proj_dir = _project_dir(project_id)
+    segmented_path = os.path.join(proj_dir, "subtitles_segmented.json")
+    if os.path.exists(segmented_path) and os.path.getsize(segmented_path) > 0:
+        try:
+            with open(segmented_path, "r", encoding="utf-8") as f:
+                segmented = json.load(f)
+        except json.JSONDecodeError:
+            return None
+        raw = load_project_raw_subtitles(project_id) or []
+        normalized = normalize_segmented_cues(segmented, raw)
+        if normalized != segmented:
+            _write_json(segmented_path, normalized)
+        return normalized
+
+    raw = load_project_raw_subtitles(project_id)
+    if raw is None:
+        return None
+    # Old versions stored segmented text in subtitles_raw.json. Preserve it as
+    # both best-available source and segmented layer; no user data is discarded.
+    segmented = normalize_segmented_cues(raw, raw)
+    _write_json(segmented_path, segmented)
+    return segmented
+
+
+def load_project_subtitle_quality(project_id: str) -> Optional[dict]:
+    proj_dir = _project_dir(project_id)
+    quality_path = os.path.join(proj_dir, "subtitle_quality.json")
+    if os.path.exists(quality_path) and os.path.getsize(quality_path) > 0:
+        try:
+            with open(quality_path, "r", encoding="utf-8") as f:
+                quality = json.load(f)
+            return quality if isinstance(quality, dict) else None
+        except json.JSONDecodeError:
+            return None
+    raw = load_project_raw_subtitles(project_id)
+    segmented = load_project_segmented_subtitles(project_id)
+    translated = load_project_subtitles(project_id)
+    if raw is None or segmented is None or translated is None:
+        return None
+    quality = build_quality_report(raw, segmented, translated)
+    _write_json(quality_path, quality)
+    return quality
 
 
 def save_translated_subtitles(project: dict, subtitles: list[dict]) -> dict:
@@ -361,19 +453,9 @@ def save_translated_subtitles(project: dict, subtitles: list[dict]) -> dict:
     Used by the re-translate flow so that re-segmentation doesn't overwrite
     the original raw subtitles on disk.
     """
-    pid = project["id"]
-    proj_dir = _project_dir(pid)
-
-    trans_path = os.path.join(proj_dir, "subtitles_translated.json")
-    translated_data = [
-        {k: value for k, value in subtitle.items() if k not in {"words", "wc"}}
-        for subtitle in subtitles
-    ]
-    _write_json(trans_path, translated_data)
-
-    project["subtitles_translated_path"] = trans_path
-    project["status"] = "completed"
-    return project
+    raw = load_project_raw_subtitles(project["id"]) or subtitles
+    segmented = load_project_segmented_subtitles(project["id"]) or subtitles
+    return save_subtitle_layers(project, raw, segmented, subtitles)
 
 
 def update_project_title(project_id: str, custom_title: str) -> None:

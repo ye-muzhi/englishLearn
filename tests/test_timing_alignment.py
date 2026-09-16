@@ -229,7 +229,7 @@ def test_reprocess_prefers_word_timing_and_resets_old_manual_offset(
     def fake_translate(subtitles, **_kwargs):
         return [{**subtitle, "translation": "译文"} for subtitle in subtitles]
 
-    def fake_save(proj, subtitles):
+    def fake_save(proj, subtitles, **_layers):
         captured["project"] = dict(proj)
         captured["subtitles"] = subtitles
         proj["status"] = "completed"
