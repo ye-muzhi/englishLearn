@@ -9,8 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INCLUDE_FILES = [
-    ".python-version", ".gitignore", "AGENTS.md", "FEATURES.md", "README.md",
-    "requirements.txt", "app.py", "EnglishLearn.command", "EnglishLearn-Windows.bat",
+    ".python-version", ".gitignore", "AGENTS.md", "README.md",
+    "requirements.txt", "pyproject.toml", "app.py", "EnglishLearn.command", "EnglishLearn-Windows.bat",
 ]
 INCLUDE_DIRS = [".streamlit", ".github", "desktop", "docs", "englishlearn", "scripts"]
 EXCLUDED_PARTS = {

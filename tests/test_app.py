@@ -8,6 +8,7 @@ threads and LLM calls are NOT exercised here — these are UI smoke tests.
 """
 import sys
 import os
+import json
 import time
 import logging
 import importlib

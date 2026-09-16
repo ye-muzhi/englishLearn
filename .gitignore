@@ -20,6 +20,7 @@ __pycache__/
 # Build artifacts and logs
 dist/
 build/
+*.egg-info/
 desktop/node_modules/
 desktop/src-tauri/target/
 desktop/src-tauri/binaries/*
