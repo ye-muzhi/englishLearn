@@ -9,10 +9,13 @@ Thread-safety: each task dict is mutated in place by the background thread.
 Dict key updates are atomic under Python's GIL, so reads from the main
 thread are safe.
 """
+import copy
+import json
 import os
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .asr_engine import ASREngine
@@ -33,6 +36,152 @@ from .sentence_segmenter import sentence_segment, SUBTITLE_MIN_PAUSE, SUBTITLE_M
 # session_token -> {task_id -> task_dict}
 active_tasks: dict[str, dict[str, dict]] = {}
 active_tasks_lock = threading.Lock()
+_asr_slot = threading.Semaphore(1)
+_translation_slot = threading.Semaphore(1)
+_TASK_TERMINAL_STAGES = {"complete", "failed", "cancelled", "interrupted"}
+_TASK_PUBLIC_KEYS = {
+    "task_id", "kind", "project_id", "step", "stage", "step_label",
+    "progress", "started_at", "updated_at", "completed_at", "completed",
+    "consumed", "error", "result_project_id", "video_path", "audio_path",
+    "thumbnail_path", "thumbnail_url", "filename", "batch_current",
+    "batch_total", "raw_count", "raw_count_before_segment",
+    "segmented_count", "cancel_requested",
+}
+_task_store_path: str | None = None
+_task_params: dict[str, dict] = {}
+
+
+class TaskCancelled(RuntimeError):
+    """Raised at safe pipeline boundaries after the user requests cancel."""
+
+
+def _task_key(session_token: str, task_id: str) -> str:
+    return f"{session_token}:{task_id}"
+
+
+def configure_task_store(work_dir: str) -> None:
+    """Point durable task state at the active deployment data directory."""
+    global _task_store_path
+    desired = os.path.join(os.path.abspath(work_dir), "tasks.json")
+    with active_tasks_lock:
+        if _task_store_path == desired:
+            return
+        _task_store_path = desired
+        active_tasks.clear()
+        _load_persisted_tasks_locked()
+
+
+def _task_snapshot(task: dict) -> dict:
+    return {
+        key: copy.deepcopy(task[key])
+        for key in _TASK_PUBLIC_KEYS
+        if key in task
+    }
+
+
+def _persist_tasks_locked() -> None:
+    if not _task_store_path:
+        return
+    os.makedirs(os.path.dirname(_task_store_path), exist_ok=True)
+    payload = {
+        "version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "tasks": [
+            {"session_token": session_token, **_task_snapshot(task)}
+            for session_token, session_tasks in active_tasks.items()
+            for task in session_tasks.values()
+        ],
+    }
+    temp = f"{_task_store_path}.tmp-{uuid.uuid4().hex[:8]}"
+    try:
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, _task_store_path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def _load_persisted_tasks_locked() -> None:
+    if not _task_store_path or not os.path.exists(_task_store_path):
+        return
+    try:
+        with open(_task_store_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return
+    for saved in payload.get("tasks", []) if isinstance(payload, dict) else []:
+        if not isinstance(saved, dict) or not saved.get("task_id"):
+            continue
+        session_token = str(saved.pop("session_token", "restored"))
+        task = {key: value for key, value in saved.items() if key in _TASK_PUBLIC_KEYS}
+        if not task.get("completed"):
+            task.update({
+                "stage": "interrupted",
+                "step_label": "Interrupted when the app stopped",
+                "completed": True,
+                "completed_at": time.time(),
+                "error": "The app stopped before this task completed. Retry the task to continue.",
+            })
+        active_tasks.setdefault(session_token, {})[task["task_id"]] = task
+
+
+def _update_task(task: dict, **changes) -> None:
+    with active_tasks_lock:
+        task.update(changes)
+        task["updated_at"] = time.time()
+        _persist_tasks_locked()
+
+
+def _check_cancelled(task: dict) -> None:
+    if task.get("cancel_requested"):
+        raise TaskCancelled("Task cancelled by user.")
+
+
+def cancel_task(task_key: str) -> bool:
+    """Request cooperative cancellation at the next safe pipeline boundary."""
+    with active_tasks_lock:
+        for session_token, tasks in active_tasks.items():
+            for task_id, task in tasks.items():
+                if task_key in {task_id, _task_key(session_token, task_id)}:
+                    if task.get("completed"):
+                        return False
+                    task["cancel_requested"] = True
+                    task["step_label"] = "Cancelling"
+                    task["updated_at"] = time.time()
+                    _persist_tasks_locked()
+                    return True
+    return False
+
+
+def retry_task(task_key: str, session_token: str) -> str | None:
+    """Restart a failed/cancelled task using in-process private parameters."""
+    original_key = task_key
+    params = _task_params.get(original_key)
+    if params is None:
+        with active_tasks_lock:
+            for owner, tasks in active_tasks.items():
+                for task_id in tasks:
+                    candidate = _task_key(owner, task_id)
+                    if task_key in {task_id, candidate}:
+                        params = _task_params.get(candidate)
+                        break
+    if params is None:
+        return None
+    return start_pipeline_task(session_token, copy.deepcopy(params))
+
+
+def can_retry_task(task_key: str) -> bool:
+    if task_key in _task_params:
+        return True
+    return any(
+        task_key in {task_id, _task_key(owner, task_id)}
+        and _task_key(owner, task_id) in _task_params
+        for owner, tasks in active_tasks.items()
+        for task_id in tasks
+    )
 
 
 def _subtitle_language_candidates(language_code: str) -> list[str]:
@@ -110,7 +259,10 @@ def _merge_native_caption_tracks(
 
 def active_tasks_for_session(session_token: str) -> dict[str, dict]:
     with active_tasks_lock:
-        return active_tasks.get(session_token, {})
+        return {
+            task_id: _task_snapshot(task)
+            for task_id, task in active_tasks.get(session_token, {}).items()
+        }
 
 
 def all_active_tasks() -> dict[str, dict]:
@@ -123,7 +275,7 @@ def all_active_tasks() -> dict[str, dict]:
     """
     with active_tasks_lock:
         return {
-            f"{session_token}:{task_id}": task
+            f"{session_token}:{task_id}": _task_snapshot(task)
             for session_token, session_tasks in active_tasks.items()
             for task_id, task in session_tasks.items()
         }
@@ -133,9 +285,8 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
     """Background thread entry point. Writes status to *task*; never calls st.*."""
     try:
         kind = params["kind"]
-        task["step"] = 1
-        task["stage"] = "source"
-        task["step_label"] = "Resolving source"
+        _update_task(task, step=1, stage="source", step_label="Resolving source")
+        _check_cancelled(task)
 
         native_target_used = False
         subtitles = None
@@ -238,6 +389,7 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
                 raise RuntimeError("Raw subtitles are unavailable. Re-process the video before translating again.")
 
         if subtitles_raw is None:
+            _check_cancelled(task)
             if kind == "reprocess" and audio_path and os.path.exists(audio_path):
                 pass
             else:
@@ -251,9 +403,13 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             task["stage"] = "transcribe"
             task["step_label"] = "Transcribing"
             task["progress"] = 0.0
-            engine = ASREngine(model_size=params["asr_model"])
-            engine.load_model()
-            subtitles_raw = engine.transcribe(audio_path)
+            task["step_label"] = "Waiting for speech model"
+            with _asr_slot:
+                _check_cancelled(task)
+                _update_task(task, step_label="Transcribing")
+                engine = ASREngine(model_size=params["asr_model"])
+                engine.load_model()
+                subtitles_raw = engine.transcribe(audio_path)
             task["raw_count"] = len(subtitles_raw)
 
         # Freeze the source layer before any segmentation changes cue
@@ -273,6 +429,7 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             task["progress"] = 1.0
             model_used = "platform:native-target-subtitles"
         else:
+            _check_cancelled(task)
             if can_use_ai_segment(_seg_model) and not has_word_timing:
                 task["step"] = 3
                 task["stage"] = "segment"
@@ -280,6 +437,7 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
                 task["progress"] = 0.0
                 n_raw = len(subtitles_raw)
                 def _seg_cb(cur, tot, _t=task):
+                    _check_cancelled(_t)
                     _t["progress"] = cur / tot if tot else 1.0
                 subtitles_raw = ai_sentence_segment(
                     subtitles_raw,
@@ -314,20 +472,28 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             task["step_label"] = "Translating"
             task["progress"] = 0.0
             def _trans_cb(cur, tot, _t=task):
-                _t["progress"] = cur / tot if tot else 1.0
-                _t["batch_current"] = cur
-                _t["batch_total"] = tot
-            subtitles = translate_subtitles(
-                subtitles_raw,
-                engine=params["engine_type"],
-                model=_seg_model,
-                api_base=params["api_base"],
-                api_key=params["api_key"],
-                target_lang=params["target_lang"],
-                max_tokens=params.get("max_tokens", 32768),
-                on_progress=_trans_cb,
-                max_workers=params.get("max_workers", 6),
-            )
+                _check_cancelled(_t)
+                _update_task(
+                    _t,
+                    progress=cur / tot if tot else 1.0,
+                    batch_current=cur,
+                    batch_total=tot,
+                )
+            _update_task(task, step_label="Waiting for translation model")
+            with _translation_slot:
+                _check_cancelled(task)
+                _update_task(task, step_label="Translating")
+                subtitles = translate_subtitles(
+                    subtitles_raw,
+                    engine=params["engine_type"],
+                    model=_seg_model,
+                    api_base=params["api_base"],
+                    api_key=params["api_key"],
+                    target_lang=params["target_lang"],
+                    max_tokens=params.get("max_tokens", 32768),
+                    on_progress=_trans_cb,
+                    max_workers=params.get("max_workers", 6),
+                )
 
             missing = [s for s in subtitles if s.get("text", "").strip() and not s.get("translation", "").strip()]
             if missing:
@@ -337,6 +503,7 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
                 )
 
             model_used = f"{params['engine_type']}:{params['model_name']}"
+        _check_cancelled(task)
         segmented_subtitles = normalize_segmented_cues(
             subtitles if native_target_used else subtitles_raw,
             source_subtitles_raw,
@@ -423,21 +590,22 @@ def run_pipeline_thread(task: dict, params: dict, work_dir: str) -> None:
             update_project(proj)
             result_pid = proj["id"]
 
-        task["result_project_id"] = result_pid
-        task["completed"] = True
-        task["completed_at"] = time.time()
-        task["consumed"] = False
-        task["stage"] = "complete"
-        task["step_label"] = "Completed"
-        task["progress"] = 1.0
+        _update_task(
+            task, result_project_id=result_pid, completed=True,
+            completed_at=time.time(), consumed=False, stage="complete",
+            step_label="Completed", progress=1.0, error=None,
+        )
 
+    except TaskCancelled as exc:
+        _update_task(
+            task, error=str(exc), completed=True, completed_at=time.time(),
+            consumed=False, stage="cancelled", step_label="Cancelled",
+        )
     except Exception as exc:
-        task["error"] = str(exc)
-        task["completed"] = True
-        task["completed_at"] = time.time()
-        task["consumed"] = False
-        task["stage"] = "failed"
-        task["step_label"] = f"Failed: {exc}"
+        _update_task(
+            task, error=str(exc), completed=True, completed_at=time.time(),
+            consumed=False, stage="failed", step_label=f"Failed: {exc}",
+        )
         project_id = params.get("project_id")
         if project_id:
             projects_list = load_projects()
@@ -468,6 +636,7 @@ def start_pipeline_task(session_token: str, params: dict) -> str:
         "step_label": "Starting",
         "progress": 0.0,
         "started_at": time.time(),
+        "updated_at": time.time(),
         "completed": False,
         "consumed": False,
         "error": None,
@@ -481,9 +650,12 @@ def start_pipeline_task(session_token: str, params: dict) -> str:
         "batch_total": 0,
         "raw_count": 0,
         "segmented_count": 0,
+        "cancel_requested": False,
     }
     with active_tasks_lock:
         active_tasks.setdefault(session_token, {})[task_id] = task
+        _task_params[_task_key(session_token, task_id)] = copy.deepcopy(params)
+        _persist_tasks_locked()
     thread = threading.Thread(
         target=run_pipeline_thread,
         args=(task, params, params.get("_work_dir", ".")),

@@ -1206,6 +1206,42 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Failed",
         "zh": "失败",
     },
+    "tasks.center": {
+        "en": "Tasks ({n})",
+        "zh": "任务中心（{n}）",
+    },
+    "tasks.empty": {
+        "en": "No task history yet.",
+        "zh": "暂无任务记录。",
+    },
+    "tasks.cancel": {
+        "en": "Cancel task",
+        "zh": "取消任务",
+    },
+    "tasks.cancel_requested": {
+        "en": "Cancellation requested. The current safe step will finish first.",
+        "zh": "已请求取消，当前安全步骤完成后将停止。",
+    },
+    "tasks.retry": {
+        "en": "Retry",
+        "zh": "重试",
+    },
+    "tasks.retry_started": {
+        "en": "Task restarted.",
+        "zh": "任务已重新开始。",
+    },
+    "tasks.retry_after_restart": {
+        "en": "This task was restored after an app restart. Retry it from the project card.",
+        "zh": "该任务来自上次运行，请从对应项目卡片重新处理。",
+    },
+    "pipeline.status.cancelled": {
+        "en": "Cancelled",
+        "zh": "已取消",
+    },
+    "pipeline.status.interrupted": {
+        "en": "Interrupted",
+        "zh": "意外中断",
+    },
 }
 
 # Language flag emoji for target language codes

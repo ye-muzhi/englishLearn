@@ -560,16 +560,19 @@ def _get_session_token() -> str:
 
 
 def _active_tasks_for_session() -> dict[str, dict]:
+    pipeline_runner.configure_task_store(WORK_DIR)
     return pipeline_runner.active_tasks_for_session(_get_session_token())
 
 
 def _active_tasks_for_app() -> dict[str, dict]:
     """Tasks are application-wide in this local, single-user product."""
+    pipeline_runner.configure_task_store(WORK_DIR)
     return pipeline_runner.all_active_tasks()
 
 
 def _start_pipeline_task(params: dict) -> str:
     params["_work_dir"] = WORK_DIR
+    pipeline_runner.configure_task_store(WORK_DIR)
     return pipeline_runner.start_pipeline_task(_get_session_token(), params)
 
 
@@ -3640,6 +3643,11 @@ def _render_project_list(lang):
                 result = _clear_all_learning_data()
                 st.toast(t("projects.delete_all_done", lang, n=result["projects"]), icon="🗑️")
                 st.rerun()
+    with st.expander(
+        t("tasks.center", lang, n=len(tasks)),
+        expanded=any(not task.get("completed") for task in tasks.values()),
+    ):
+        _render_task_center(tasks, lang)
     # ---- Active background pipeline tasks ----
     # Evict old consumed tasks (>60s after completion)
     now = time.time()
@@ -3720,6 +3728,51 @@ def _render_project_card_progress_fragment(project_id: str, lang: str) -> None:
         return
     st.caption(_task_label(task, lang))
     st.progress(min(0.99, task.get("progress", 0.0) or 0.0))
+
+
+def _render_task_center(tasks: dict[str, dict], lang: str) -> None:
+    """Compact durable task history with safe cancellation and retry."""
+    if not tasks:
+        st.caption(t("tasks.empty", lang))
+        return
+    ordered = sorted(
+        tasks.items(), key=lambda item: item[1].get("started_at", 0), reverse=True,
+    )
+    for task_key, task in ordered[:12]:
+        stage = task.get("stage") or "starting"
+        if stage == "complete":
+            icon = "✅"
+        elif stage in {"failed", "interrupted"}:
+            icon = "❌"
+        elif stage == "cancelled":
+            icon = "⏹"
+        else:
+            icon = "🔄"
+        name = str(task.get("filename") or task.get("project_id") or task["task_id"])
+        st.markdown(f"{icon} **{html_lib.escape(name[:34])}**")
+        st.caption(_task_label(task, lang))
+        if not task.get("completed"):
+            st.progress(min(0.99, float(task.get("progress", 0) or 0)))
+            if st.button(
+                t("tasks.cancel", lang), key=f"cancel_task_{task_key}",
+                width="stretch", disabled=bool(task.get("cancel_requested")),
+            ):
+                if pipeline_runner.cancel_task(task_key):
+                    st.toast(t("tasks.cancel_requested", lang))
+                    st.rerun()
+        elif stage in {"failed", "cancelled", "interrupted"}:
+            if task.get("error"):
+                st.caption(str(task["error"])[:160])
+            can_retry = pipeline_runner.can_retry_task(task_key)
+            if st.button(
+                t("tasks.retry", lang), key=f"retry_task_{task_key}",
+                width="stretch", disabled=not can_retry,
+                help=None if can_retry else t("tasks.retry_after_restart", lang),
+            ):
+                if pipeline_runner.retry_task(task_key, _get_session_token()):
+                    st.toast(t("tasks.retry_started", lang), icon="🔄")
+                    st.rerun()
+        st.divider()
 
 
 # ---------------------------------------------------------------------------
